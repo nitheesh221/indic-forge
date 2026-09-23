@@ -1,0 +1,43 @@
+[project]
+name = "indictrans2-finetune"
+version = "0.1.0"
+description = "LoRA fine-tuning toolkit for AI4Bharat IndicTrans2 (Hugging Face)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "IndicTrans2 Fine-tune" }]
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.44",
+  "datasets>=2.20",
+  "peft>=0.12",
+  "accelerate>=0.33",
+  "sentencepiece>=0.2",
+  "protobuf>=4.25",
+  "sacrebleu>=2.4",
+  "pandas>=2.2",
+  "typer>=0.12",
+  "gradio>=4.44",
+  "indictranstoolkit>=1.0.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+indictrans2-ft = "indictrans2_finetune.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
