@@ -59,7 +59,7 @@ def test_mismatched_files_raise(tmp_path: Path):
     pair.mkdir(parents=True)
     (pair / "dev.eng_Latn").write_text("a\nb\n", encoding="utf-8")
     (pair / "dev.hin_Deva").write_text("एक\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="different"):
+    with pytest.raises(ValueError, match="has 2 lines"):
         validate_official_dir(tmp_path, "dev", ["eng_Latn"], ["hin_Deva"])
 
 

@@ -10,11 +10,7 @@ from peft import PeftModel
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from indictrans2_finetune.langs import default_model, normalize_lang
-
-try:
-    from IndicTransToolkit import IndicProcessor
-except ImportError:  # pragma: no cover
-    from IndicTransToolkit.IndicTransToolkit import IndicProcessor
+from indictrans2_finetune.toolkit import get_processor
 
 
 def _device() -> torch.device:
@@ -36,7 +32,7 @@ def load_pipeline(model_name: str, adapter: str | None = None):
         model = PeftModel.from_pretrained(model, adapter)
     model.to(_device())
     model.eval()
-    processor = IndicProcessor(inference=True)
+    processor = get_processor(inference=True)
     return tokenizer, model, processor
 
 

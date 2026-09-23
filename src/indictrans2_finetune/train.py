@@ -23,11 +23,7 @@ from transformers import (
 
 from indictrans2_finetune.data import validate_official_dir
 from indictrans2_finetune.langs import default_model, normalize_lang
-
-try:
-    from IndicTransToolkit import IndicDataCollator, IndicProcessor
-except ImportError:  # pragma: no cover - import path varies by toolkit version
-    from IndicTransToolkit.IndicTransToolkit import IndicDataCollator, IndicProcessor
+from indictrans2_finetune.toolkit import get_collator, get_processor
 
 
 @dataclass
@@ -61,7 +57,7 @@ class TrainConfig:
 
 
 def _processor() -> Any:
-    return IndicProcessor(inference=False)
+    return get_processor(inference=False)
 
 
 def load_and_process_translation_dataset(
@@ -220,10 +216,9 @@ def train(config: TrainConfig) -> Path:
         attn_implementation="eager",
     )
     processor = _processor()
-    collator = IndicDataCollator(
-        tokenizer=tokenizer,
-        model=model,
-        padding="longest",
+    collator = get_collator(
+        tokenizer,
+        model,
         pad_to_multiple_of=8 if use_cuda else None,
         label_pad_token_id=-100,
     )

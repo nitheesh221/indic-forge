@@ -10,14 +10,14 @@ This repo follows the official data layout from [`huggingface_interface/train_lo
 - Pick the right checkpoint (`en-indic`, `indic-en`, or `indic-indic`; distilled 200M or 1B)
 - LoRA train with the same target modules as the official script (`q_proj,k_proj`)
 - Translate and score BLEU / chrF with or without an adapter
-- A small Gradio UI for the recipe, data conversion, and a translation box
+- A small web UI for the recipe, data conversion, and a translation box
 - A 40/8 English–Hindi **public-services** sample (Aadhaar, UPI, PM-Kisan, GST, …) so you can dry-run the pipeline
 
 GPU is strongly recommended for training. Distilled models can run inference on CPU, slowly. The playground UI does **not** need a GPU until you press Translate.
 
 ## Setup
 
-Python 3.10+ on Linux or macOS (`IndicTransToolkit` is not supported on Windows).
+Python 3.10+ on Linux or macOS (`IndicTransToolkit` is not supported on Windows). Pin **transformers 4.x** (this repo does that for you); IndicTransToolkit currently imports tokenizer types that moved in transformers 5.
 
 ```bash
 python3 -m venv .venv
