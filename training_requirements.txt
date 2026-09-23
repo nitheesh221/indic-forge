@@ -1,0 +1,299 @@
+# Training requirements — IndicTrans2 (text-to-text MT)
+# Mapped from the Qwen VL OCR trainer README + training_requirements.txt.
+# Same SECTION / FIELD layout. Vision-only fields are SKIPPED (see 0a).
+# Source of truth for the Hugging Face trainer we will implement.
+
+# =============================================================================
+# 0a. SKIPPED FROM QWEN (not used for IndicTrans2 translation)
+# =============================================================================
+# --deepspeed / ds_zero3.json
+# --freeze_vision / freeze encoder
+# --image_size, --jpeg_quality, Pillow
+# --system_prompt, --user_prompt, prompt files, chat templates
+# TRL SFTTrainer prompt-token masking (this is seq2seq NMT, not VL OCR)
+# OCR metrics: cer wer anls token_set_ratio wratio hallucination_rate
+# full_qlora (rejected in Qwen; still rejected here)
+
+# =============================================================================
+# 0. ENVIRONMENT / PYTHON PACKAGES
+# =============================================================================
+# Python: >=3.10
+# CUDA: required for real training (CPU allowed only for data/tests)
+# BitsAndBytes: required for train_mode=qlora
+# DeepSpeed: SKIPPED
+
+python_requires = >=3.10
+
+torch>=2.4.0
+transformers>=4.51.0,<5
+accelerate>=1.0.0
+peft>=0.13.0
+bitsandbytes>=0.44.0
+datasets>=3.0.0
+indictranstoolkit>=1.0.3
+sacrebleu>=2.4.0
+pandas>=2.2.0
+safetensors>=0.4.0
+sentencepiece>=0.2.0
+typer>=0.12.0
+pytest>=8.0.0
+
+# =============================================================================
+# 0b. DATASET FORMAT
+# =============================================================================
+# File: JSON / JSONL / CSV / TSV
+# Required fields per row (aliases allowed):
+#   src           str   source sentence
+#   tgt           str   target sentence
+# Optional:
+#   src_lang      str   FLORES tag (eng_Latn, hin_Deva, …) or alias (en, hi)
+#   tgt_lang      str   FLORES tag
+#   id            str
+#
+# If src_lang/tgt_lang omitted, CLI --src_lang / --tgt_lang are required.
+# Internally converted to official IT2 pair folders:
+#   {data_dir}/train/{src}-{tgt}/train.{src}
+#   {data_dir}/train/{src}-{tgt}/train.{tgt}
+#   {data_dir}/dev/{src}-{tgt}/dev.{src}
+#   {data_dir}/dev/{src}-{tgt}/dev.{tgt}
+#
+# Loss: standard seq2seq CE on target tokens (labels, pad = -100).
+# Preprocess: IndicProcessor (inference=False) then HF tokenizer, max_length=256.
+
+# =============================================================================
+# 0c. TRAIN MODES  (same semantics as Qwen)
+# =============================================================================
+# train_mode | what trains                         | --final_model_dir
+# -----------|-------------------------------------|---------------------------
+# full       | all base weights                    | full HF model
+# full + --adapter_path | merge adapter, then full | full HF model
+# full_lora  | LoRA on ALL linear attn+FFN modules | merged full model
+# full_lora + --adapter_path | continue/merge LoRA | merged full model
+# lora       | LoRA on official IT2 modules only   | adapter files
+# lora + --adapter_path | continue existing LoRA   | adapter files
+# qlora      | 4-bit frozen base + LoRA            | adapter files
+# qlora + --adapter_path | continue existing QLoRA | adapter files
+#
+# Not supported: full_qlora
+#
+# LoRA target_modules (MODEL-SPECIFIC, IndicTrans2 M2M-style):
+#   lora:       q_proj, k_proj          # official AI4Bharat HF recipe
+#   full_lora:  q_proj, k_proj, v_proj, out_proj, fc1, fc2
+#   qlora:      same module set as lora (override with --lora_target_modules)
+
+# =============================================================================
+# 0d. LAUNCH  (same rules as Qwen)
+# =============================================================================
+# 1 GPU:   python train.py --gpu_ids 0 ...
+# 2+ GPUs: CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py ...
+#          (omit --gpu_ids when using torchrun)
+# nproc_per_node must equal the number of IDs in CUDA_VISIBLE_DEVICES.
+# Do not mix python --gpu_ids A,B auto-relaunch with torchrun + --gpu_ids.
+# Entry point: train.py  (CLI: indictrans2-ft train)
+
+# =============================================================================
+# 1. MODEL
+# =============================================================================
+# --train_mode
+#   required: no
+#   type: str
+#   choices: full | full_lora | lora | qlora
+#   default: lora
+
+# --adapter_path
+#   required: no
+#   type: str
+#   default: None
+#   notes: existing LoRA/QLoRA dir; merge/continue depending on train_mode
+
+# --model_hf_id
+#   required: yes
+#   type: str
+#   choices (architecture family + tokenizer):
+#     ai4bharat/indictrans2-en-indic-dist-200M
+#     ai4bharat/indictrans2-en-indic-1B
+#     ai4bharat/indictrans2-indic-en-dist-200M
+#     ai4bharat/indictrans2-indic-en-1B
+#     ai4bharat/indictrans2-indic-indic-dist-320M
+#     ai4bharat/indictrans2-indic-indic-1B
+#   default: none
+#   notes: MODEL-SPECIFIC. Must match translation direction:
+#            English → Indic  => en-indic
+#            Indic → English  => indic-en
+#            Indic → Indic    => indic-indic
+#          trust_remote_code=True
+
+# --model_id
+#   required: no
+#   type: str
+#   default: same as --model_hf_id
+#   notes: Hub id or local weights path actually loaded
+
+# --src_lang / --tgt_lang
+#   required: yes unless present on every JSON row
+#   type: str  (FLORES or alias)
+#   notes: used for IndicProcessor and folder names
+
+# --output_dir
+#   required: no
+#   default: ./it2_out/exp
+
+# --final_model_dir
+#   required: no
+#   default: ./it2_out/exp/final_model
+
+# --save_only_model
+#   required: no
+#   type: flag
+#   default: false
+
+# =============================================================================
+# 2. DATASET
+# =============================================================================
+# --train_json   required: yes   JSON/JSONL/CSV/TSV
+# --val_json     required: yes   same format
+# --data_dir     optional prepared official layout (skips convert if already valid)
+
+# =============================================================================
+# 3. TRAINING
+# =============================================================================
+# --epochs                         default: 2
+# --batch_size                     default: 2     (per-device train)
+# --eval_batch_size                default: 2
+# --gradient_accumulation_steps    default: 4
+# --learning_rate                  default: 2e-5
+#   notes: use 2e-5 for full/full_lora; 2e-4 for lora/qlora (same as Qwen README)
+# --weight_decay                   default: 0.01
+# --warmup_ratio                   default: 0.03
+# --lr_scheduler_type              default: cosine
+#   choices: linear | cosine | cosine_with_restarts | polynomial | constant |
+#            constant_with_warmup | inverse_sqrt
+# --optim                          default: adamw_torch
+#   choices: adamw_torch | adamw_torch_fused | adamw_hf | adamw_bnb_8bit |
+#            paged_adamw_8bit | paged_adamw_32bit | adafactor
+#   notes: qlora README uses paged_adamw_32bit; small-GPU full/full_lora: adamw_bnb_8bit
+# --max_grad_norm                  default: 1.0
+# --logging_steps                  default: 50
+# --seed                           default: 42
+# --max_length                     default: 256   (IT2 HF)
+
+# =============================================================================
+# 4. EVALUATION / VALIDATION
+# =============================================================================
+# --eval_strategy     default: epoch    choices: epoch | steps | no
+# --eval_steps        default: 50       when eval_strategy=steps
+# --eval_max_new_tokens / generation_max_length   default: 256
+# --eval_accumulation_steps  default: 1
+# --generation_num_beams     default: 5   (IT2 official inference)
+
+# Align --eval_strategy and --save_strategy so Top-N sees eval_* at the same step.
+
+# =============================================================================
+# 5. CHECKPOINT SAVING
+# =============================================================================
+# --save_strategy      default: epoch
+# --save_steps         default: 500
+# --save_total_limit   default: 1
+#   notes: Trainer prune disabled; Top-N retention =
+#          min(top_n_checkpoints, save_total_limit) when both are set
+
+# =============================================================================
+# 6. BEST MODEL METRIC  (Trainer/SFT only — not MT metrics)
+# =============================================================================
+# --metric_for_best_model
+#   choices: eval_loss | eval_entropy | eval_mean_token_accuracy
+#   default: eval_loss
+#   lower-is-better: eval_loss, eval_entropy
+#   higher-is-better: eval_mean_token_accuracy
+
+# =============================================================================
+# 7. TOP-N CHECKPOINTS
+# =============================================================================
+# --top_n_checkpoints   default: 1
+
+# =============================================================================
+# 8. TRANSLATION METRICS (CSV + eval command; do NOT select checkpoints)
+# =============================================================================
+# Same role as Qwen OCR metrics: reported on generated val translations.
+# Implemented with sacrebleu (IndicTrans2 / FLORES / WMT practice).
+# Tokenization: sacrebleu flores200 (matches FLORES-200 / IT2 language tags).
+#
+# --eval_metrics  nargs=+  default: all of:
+#   bleu          corpus BLEU (sacrebleu, tokenize=flores200)     WMT + IT2 paper
+#   chrf          chrF (character F-score)                        Indic-friendly
+#   chrf2pp       chrF2++ (chrF + word bigrams, word_order=2)     official IT2 eval
+#   ter           Translation Edit Rate                           WMT, sacrebleu
+#   exact_match   sentence-level exact match after strip          short-string check
+#
+# NOT in v1 (heavy extra models): COMET, BLEURT, BERTScore
+# NOT from OCR list: cer, wer, anls, hallucination_rate, fuzzy wratio
+#
+# --eval_metrics_csv    default: eval_metrics.csv   under --output_dir
+# --eval_samples_csv    default: eval_samples.csv   src, ref, hyp per row
+# --training_logs_csv   default: training_logs.csv
+
+# =============================================================================
+# 9. LoRA
+# =============================================================================
+# --lora_r          default: 8
+# --lora_alpha      default: 16
+# --lora_dropout    default: 0.05
+# --lora_target_modules
+#   default by mode: lora/qlora = q_proj,k_proj
+#                    full_lora  = q_proj,k_proj,v_proj,out_proj,fc1,fc2
+
+# =============================================================================
+# 11. QLoRA / BITSANDBYTES
+# =============================================================================
+# --bnb_compute_dtype           default: bfloat16   choices: float16 | bfloat16
+# --bnb_4bit_quant_type         default: nf4        choices: nf4 | fp4
+# --bnb_4bit_use_double_quant   flag, default: false
+
+# =============================================================================
+# 14. PERFORMANCE
+# =============================================================================
+# --gpu_ids                  default: None
+# --num_workers              default: 4
+# --gradient_checkpointing   flag, default: false
+# --bf16 / --fp16            mutually exclusive flags
+# SKIP: --deepspeed, --freeze_vision
+
+# Small-GPU full FT (no ZeRO): --gpu_ids 0, --optim adamw_bnb_8bit,
+#   --batch_size 1 --gradient_accumulation_steps 8 --gradient_checkpointing
+
+# =============================================================================
+# 15. RESUME
+# =============================================================================
+# --resume_from_checkpoint   default: None
+#   incompatible with optimizer restore if --save_only_model was used
+
+# =============================================================================
+# 16. REPORTING
+# =============================================================================
+# --report_to   choices: none   default: none
+
+# =============================================================================
+# 17. OUTPUTS
+# =============================================================================
+# checkpoint-*         under --output_dir, kept by Top-N SFT metric
+# eval_metrics.csv     Trainer eval_* plus mean MT scores
+# eval_samples.csv     src / ref / hyp
+# training_logs.csv    Trainer log rows
+# --final_model_dir    full weights (full, full_lora) or adapter (lora, qlora)
+
+# =============================================================================
+# 19. BLANK LAUNCH TEMPLATE
+# =============================================================================
+# python train.py --gpu_ids 0 \
+#   --model_hf_id ai4bharat/indictrans2-en-indic-dist-200M \
+#   --model_id ai4bharat/indictrans2-en-indic-dist-200M \
+#   --train_mode lora \
+#   --train_json data/sample/train.jsonl \
+#   --val_json data/sample/dev.jsonl \
+#   --src_lang eng_Latn --tgt_lang hin_Deva \
+#   --output_dir ./it2_out/lora \
+#   --final_model_dir ./it2_out/lora/final_model \
+#   --epochs 2 --batch_size 2 --gradient_accumulation_steps 4 \
+#   --learning_rate 2e-4 --optim adamw_torch --bf16 \
+#   --eval_strategy epoch --save_strategy epoch \
+#   --metric_for_best_model eval_loss --top_n_checkpoints 3
