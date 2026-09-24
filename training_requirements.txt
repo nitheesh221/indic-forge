@@ -32,6 +32,10 @@ bitsandbytes>=0.44.0
 datasets>=3.0.0
 indictranstoolkit>=1.0.3
 sacrebleu>=2.4.0
+unbabel-comet>=2.2.0
+bert-score>=0.3.13
+nltk>=3.8
+evaluate>=0.4.0
 pandas>=2.2.0
 safetensors>=0.4.0
 sentencepiece>=0.2.0
@@ -215,18 +219,24 @@ pytest>=8.0.0
 # 8. TRANSLATION METRICS (CSV + eval command; do NOT select checkpoints)
 # =============================================================================
 # Same role as Qwen OCR metrics: reported on generated val translations.
-# Implemented with sacrebleu (IndicTrans2 / FLORES / WMT practice).
-# Tokenization: sacrebleu flores200 (matches FLORES-200 / IT2 language tags).
+# Priority (user-locked):
+#   1 chrF++     Best primary metric (official IT2 / Indic morphology)
+#   2 COMET      Best semantic-quality metric (src+hyp+ref)
+#   3 BLEU       Standard MT benchmark (sacrebleu flores200)
+#   4 BERTScore  Additional semantic evaluation (multilingual encoder)
+#   5 METEOR     Additional lexical/semantic (weaker on Indic WordNet)
+#   6 TER        Edit-distance / error analysis
 #
-# --eval_metrics  nargs=+  default: all of:
-#   bleu          corpus BLEU (sacrebleu, tokenize=flores200)     WMT + IT2 paper
-#   chrf          chrF (character F-score)                        Indic-friendly
-#   chrf2pp       chrF2++ (chrF + word bigrams, word_order=2)     official IT2 eval
-#   ter           Translation Edit Rate                           WMT, sacrebleu
-#   exact_match   sentence-level exact match after strip          short-string check
+# --eval_metrics  nargs=+  default: all six in that order
+#   chrf2pp       sacrebleu CHRF(word_order=2) = chrF++
+#   comet         Unbabel/wmt22-comet-da (download on first eval)
+#   bleu          sacrebleu BLEU tokenize=flores200
+#   bertscore     bert-score, model xlm-roberta-large (Indic-capable)
+#   meteor        evaluate/nltk METEOR
+#   ter           sacrebleu TER
 #
-# NOT in v1 (heavy extra models): COMET, BLEURT, BERTScore
-# NOT from OCR list: cer, wer, anls, hallucination_rate, fuzzy wratio
+# Checkpoint selection stays eval_loss (not these).
+# If COMET/BERTScore fail (no GPU / download), still write sacrebleu metrics.
 #
 # --eval_metrics_csv    default: eval_metrics.csv   under --output_dir
 # --eval_samples_csv    default: eval_samples.csv   src, ref, hyp per row
