@@ -54,7 +54,7 @@ def _read_table(path: Path) -> Iterator[dict]:
 
 
 def _read_json_document(path: Path) -> Iterator[dict]:
-    text = path.read_text(encoding="utf-8").strip()
+    text = path.read_text(encoding="utf-8").lstrip("\ufeff").strip()
     if not text:
         return
     try:
@@ -62,22 +62,39 @@ def _read_json_document(path: Path) -> Iterator[dict]:
     except json.JSONDecodeError:
         yield from _read_jsonl(path)
         return
+    yield from _records_from_payload(payload, path)
+
+
+def _records_from_payload(payload, path: Path) -> Iterator[dict]:
     if isinstance(payload, list):
         rows = payload
     elif isinstance(payload, dict):
-        rows = None
-        for key in ("data", "examples", "rows"):
-            if isinstance(payload.get(key), list):
-                rows = payload[key]
-                break
-        if rows is None:
-            rows = [payload]
+        rows = _unwrap_object(payload)
     else:
         raise ValueError(f"{path} must be a JSON object, a JSON array, or JSONL")
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
             raise ValueError(f"{path} item {index} must be a JSON object")
         yield row
+
+
+def _unwrap_object(payload: dict) -> list:
+    dict_lists = [
+        value
+        for value in payload.values()
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value[:20])
+    ]
+    if dict_lists:
+        return max(dict_lists, key=len)
+    list_fields = {key: value for key, value in payload.items() if isinstance(value, list)}
+    if len(list_fields) >= 2:
+        length = len(next(iter(list_fields.values())))
+        if length and all(len(value) == length for value in list_fields.values()):
+            scalars = {key: value for key, value in payload.items() if not isinstance(value, list)}
+            return [{**scalars, **{key: value[index] for key, value in list_fields.items()}} for index in range(length)]
+    if payload and all(isinstance(value, dict) for value in payload.values()):
+        return list(payload.values())
+    return [payload]
 
 
 def iter_rows(path: Path) -> Iterator[dict]:
@@ -90,12 +107,46 @@ def iter_rows(path: Path) -> Iterator[dict]:
         raise ValueError(f"Unsupported file type: {path.suffix} (use .jsonl, .csv, or .tsv)")
 
 
+_SRC_KEYS = (
+    "src",
+    "source",
+    "src_text",
+    "source_text",
+    "src_sentence",
+    "source_sentence",
+    "sentence_src",
+    "original",
+)
+_TGT_KEYS = (
+    "tgt",
+    "target",
+    "tgt_text",
+    "target_text",
+    "tgt_sentence",
+    "target_sentence",
+    "sentence_tgt",
+    "translation",
+    "translated",
+)
+
+
+def _as_text(value) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("text", "sentence", "value", "content", "src_text", "tgt_text"):
+            found = _as_text(value.get(key))
+            if found:
+                return found
+    return None
+
+
 def _pick(row: dict, *names: str) -> str | None:
-    lower = {key.lower(): value for key, value in row.items()}
+    lower = {str(key).lower(): value for key, value in row.items()}
     for name in names:
-        value = lower.get(name.lower())
-        if value is not None and str(value).strip():
-            return str(value).strip()
+        found = _as_text(lower.get(name.lower()))
+        if found:
+            return found
     return None
 
 
@@ -112,13 +163,9 @@ def rows_to_pairs(
     for row in rows:
         src_lang = _pick(row, "src_lang", "source_lang", "src_code") or src_lang_default
         tgt_lang = _pick(row, "tgt_lang", "target_lang", "tgt_code") or tgt_lang_default
-        src = _pick(row, "src", "source", "src_text", "source_text", "en", "english", "sentence_src")
-        tgt = _pick(row, "tgt", "target", "tgt_text", "target_text", "hi", "hindi", "sentence_tgt", "translation")
-
-        if src_lang and src_lang in row and src is None:
-            src = str(row[src_lang]).strip() or None
-        if tgt_lang and tgt_lang in row and tgt is None:
-            tgt = str(row[tgt_lang]).strip() or None
+        src = _pick(row, *_SRC_KEYS, "en", "english")
+        tgt = _pick(row, *_TGT_KEYS, "hi", "hindi")
+        src, tgt = _pair_from_row(row, src, tgt, src_lang, tgt_lang)
 
         if not src_lang or not tgt_lang:
             skipped += 1
@@ -134,6 +181,22 @@ def rows_to_pairs(
             continue
         pairs.append((src_lang, tgt_lang, _one_line(src), _one_line(tgt)))
     return pairs, skipped
+
+
+def _pair_from_row(row: dict, src: str | None, tgt: str | None, src_lang: str | None, tgt_lang: str | None):
+    containers = [row, *[value for value in row.values() if isinstance(value, dict)]]
+    for container in containers:
+        if src is None and src_lang and src_lang in container:
+            src = _as_text(container.get(src_lang))
+        if tgt is None and tgt_lang and tgt_lang in container:
+            tgt = _as_text(container.get(tgt_lang))
+        if src is None:
+            src = _pick(container, *_SRC_KEYS)
+        if tgt is None:
+            tgt = _pick(container, *_TGT_KEYS)
+        if src and tgt:
+            return src, tgt
+    return src, tgt
 
 
 def _one_line(text: str) -> str:
@@ -205,15 +268,19 @@ def prepare_file(
     src_lang: str | None = None,
     tgt_lang: str | None = None,
 ) -> PrepareReport:
+    rows = list(iter_rows(input_path))
     pairs, skipped = rows_to_pairs(
-        iter_rows(input_path),
+        rows,
         default_src_lang=src_lang,
         default_tgt_lang=tgt_lang,
     )
     if not pairs:
+        preview = ""
+        if rows:
+            preview = f" First record keys: {list(rows[0])}."
         raise ValueError(
-            f"No parallel rows found in {input_path}. "
-            "Need src/tgt text plus language codes (columns or --src-lang/--tgt-lang)."
+            f"No parallel rows found in {input_path}.{preview} "
+            "Need src/tgt text (src_text and tgt_text are accepted) plus language codes."
         )
     counts = write_official_layout(pairs, output_dir, split)
     return PrepareReport(output_dir=output_dir, pairs={split: counts}, skipped=skipped)

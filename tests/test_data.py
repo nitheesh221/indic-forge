@@ -1,5 +1,6 @@
 """Unit tests for data layout and language routing."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,59 @@ def test_src_text_json_array(tmp_path: Path):
     )
     report = prepare_file(path, tmp_path / "out", "train")
     assert report.skipped == 0
+    assert report.pairs["train"]["asm_Beng-eng_Latn"] == 1
+
+
+def test_wrapped_and_columnar_json(tmp_path: Path):
+    wrapped = tmp_path / "wrapped.json"
+    wrapped.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {
+                        "src_lang": "asm_Beng",
+                        "tgt_lang": "eng_Latn",
+                        "src_text": "এটা বাক্য।",
+                        "tgt_text": "This is a sentence.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = prepare_file(wrapped, tmp_path / "wrapped-out", "train")
+    assert report.pairs["train"]["asm_Beng-eng_Latn"] == 1
+
+    columnar = tmp_path / "columns.json"
+    columnar.write_text(
+        json.dumps(
+            {
+                "src_lang": "asm_Beng",
+                "tgt_lang": "eng_Latn",
+                "src_text": ["এটা বাক্য।"],
+                "tgt_text": ["This is a sentence."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = prepare_file(columnar, tmp_path / "columns-out", "train")
+    assert report.pairs["train"]["asm_Beng-eng_Latn"] == 1
+
+    nested = tmp_path / "nested.json"
+    nested.write_text(
+        json.dumps(
+            [
+                {
+                    "translation": {
+                        "asm_Beng": "এটা বাক্য।",
+                        "eng_Latn": "This is a sentence.",
+                    }
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = prepare_file(nested, tmp_path / "nested-out", "train", "asm_Beng", "eng_Latn")
     assert report.pairs["train"]["asm_Beng-eng_Latn"] == 1
 
 
