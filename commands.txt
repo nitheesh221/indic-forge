@@ -1,0 +1,210 @@
+# IndicTrans2 fine-tune commands used for asm_Beng -> eng_Latn
+# Machine path: /shared/nithish/INDICTRANS2_train_custom/indic-forge
+# Checkpoint:   ai4bharat/indictrans2-indic-en-dist-200M
+# Data:         11 train rows, 11 validation rows
+# Python:       3.13 virtualenv at .venv
+
+# =============================================================================
+# 1. Environment
+# =============================================================================
+
+cd /shared/nithish/INDICTRANS2_train_custom/indic-forge
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install -U pip
+pip install -e ".[dev]"
+pip install -U bitsandbytes
+
+# COMET imports pkg_resources. Setuptools 82+ removed it.
+pip install "setuptools>=69,<81"
+
+# The IndicTrans2 checkpoints are gated. Accept the model card on Hugging Face, then:
+huggingface-cli login
+
+# Later fixes were pulled before rerunning full_lora, full, and inference:
+git pull
+
+
+# =============================================================================
+# 2. Data
+# =============================================================================
+
+# train.json and valid.json are lists of objects:
+#   {"src_lang": "asm_Beng", "tgt_lang": "eng_Latn", "src_text": "...", "tgt_text": "..."}
+# train.py converts them. No separate prepare step was required.
+
+# TRAIN=/shared/nithish/INDICTRANS2_train_custom/data/train.json
+# VAL=/shared/nithish/INDICTRANS2_train_custom/data/valid.json
+
+
+# =============================================================================
+# 3. Train — LoRA
+#    Saves an adapter at it2_out/lora/final_model
+# =============================================================================
+
+python train.py \
+  --gpu_ids 0 \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_mode lora \
+  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
+  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src_lang asm_Beng --tgt_lang eng_Latn \
+  --output_dir it2_out/lora \
+  --final_model_dir it2_out/lora/final_model \
+  --epochs 2 --learning_rate 2e-4 --bf16 \
+  --eval_strategy epoch --save_strategy epoch \
+  --metric_for_best_model eval_loss --top_n_checkpoints 3
+
+
+# =============================================================================
+# 4. Train — QLoRA
+#    4-bit base + LoRA. Saves an adapter at it2_out/qlora/final_model
+# =============================================================================
+
+python train.py \
+  --gpu_ids 0 \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_mode qlora \
+  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
+  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src_lang asm_Beng --tgt_lang eng_Latn \
+  --output_dir it2_out/qlora \
+  --final_model_dir it2_out/qlora/final_model \
+  --epochs 2 --learning_rate 2e-4 --bf16 \
+  --optim paged_adamw_32bit \
+  --bnb_compute_dtype bfloat16 \
+  --bnb_4bit_quant_type nf4 \
+  --bnb_4bit_use_double_quant \
+  --eval_strategy epoch --save_strategy epoch \
+  --metric_for_best_model eval_loss --top_n_checkpoints 3
+
+
+# =============================================================================
+# 5. Train — continue the LoRA adapter
+#    Starts from it2_out/lora/final_model. Saves it2_out/lora_continue/final_model
+# =============================================================================
+
+python train.py \
+  --gpu_ids 0 \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_mode lora \
+  --adapter_path it2_out/lora/final_model \
+  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
+  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src_lang asm_Beng --tgt_lang eng_Latn \
+  --output_dir it2_out/lora_continue \
+  --final_model_dir it2_out/lora_continue/final_model \
+  --epochs 2 --learning_rate 2e-4 --bf16 \
+  --eval_strategy epoch --save_strategy epoch \
+  --metric_for_best_model eval_loss --top_n_checkpoints 3
+
+
+# =============================================================================
+# 6. Train — full_lora
+#    LoRA on attention and FFN, then merged. Saves it2_out/full_lora/final_model
+# =============================================================================
+
+python train.py \
+  --gpu_ids 0 \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_mode full_lora \
+  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
+  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src_lang asm_Beng --tgt_lang eng_Latn \
+  --output_dir it2_out/full_lora \
+  --final_model_dir it2_out/full_lora/final_model \
+  --epochs 2 \
+  --batch_size 1 \
+  --gradient_accumulation_steps 8 \
+  --learning_rate 2e-5 \
+  --optim adamw_bnb_8bit \
+  --bf16 \
+  --gradient_checkpointing \
+  --eval_strategy epoch --save_strategy epoch \
+  --metric_for_best_model eval_loss --top_n_checkpoints 3 \
+  --save_only_model
+
+
+# =============================================================================
+# 7. Train — full
+#    Every parameter. Saves it2_out/full/final_model
+# =============================================================================
+
+python train.py \
+  --gpu_ids 0 \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_mode full \
+  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
+  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src_lang asm_Beng --tgt_lang eng_Latn \
+  --output_dir it2_out/full \
+  --final_model_dir it2_out/full/final_model \
+  --epochs 2 \
+  --batch_size 1 \
+  --gradient_accumulation_steps 8 \
+  --learning_rate 2e-5 \
+  --optim adamw_bnb_8bit \
+  --bf16 \
+  --gradient_checkpointing \
+  --eval_strategy epoch --save_strategy epoch \
+  --metric_for_best_model eval_loss --top_n_checkpoints 3 \
+  --save_only_model
+
+
+# =============================================================================
+# 8. Logs written by every training run
+# =============================================================================
+
+# it2_out/<mode>/eval_metrics.csv
+# it2_out/<mode>/eval_samples.csv
+# it2_out/<mode>/training_logs.csv
+#
+# Columns in eval_metrics.csv:
+#   step, eval_loss, eval_entropy, eval_mean_token_accuracy,
+#   chrf2pp, comet, bleu, bertscore, meteor, ter, exact_match, metric_errors
+#
+# Checkpoints are ranked by eval_loss only. The seven translation metrics are logged.
+
+
+# =============================================================================
+# 9. Inference — same sentence for every mode
+# =============================================================================
+
+cd /shared/nithish/INDICTRANS2_train_custom/indic-forge
+source .venv/bin/activate
+
+TEXT="নৱাগত ৰিয়া চক্ৰৱৰ্তীক এক গুৰুত্বপূৰ্ণ ভূমিকা পালন কৰিবলৈ নিয়োগ কৰা হৈছে।"
+# Reference: Newcomer, Rhea Chakraborty, has been hired to play a pivotal role.
+
+# LoRA adapter
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --text "$TEXT" --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/lora/final_model
+
+# QLoRA adapter (loaded on the normal base model, not 4-bit)
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --text "$TEXT" --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/qlora/final_model
+
+# Continued LoRA adapter
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --text "$TEXT" --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/lora_continue/final_model
+
+# full_lora merged model
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --text "$TEXT" --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model it2_out/full_lora/final_model
+
+# full merged model
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --text "$TEXT" --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model it2_out/full/final_model
+
+# All five printed:
+#   Newcomer Rhea Chakraborty has been roped in to play a pivotal role.
