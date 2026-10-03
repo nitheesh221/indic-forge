@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from indictrans2_finetune.callbacks import TopNCheckpointCallback, retention_count
+from indictrans2_finetune.runner import _prepare_gradient_checkpointing
 from indictrans2_finetune.toolkit import IndicBatchCollator
 from indictrans2_finetune.config import maybe_relaunch, parse_args
 from indictrans2_finetune.metrics_mt import exact_match, normalize_exact, score_translations
@@ -141,6 +142,47 @@ def test_batch_collator_pads_without_toolkit_helper():
     )
     assert batch["input_ids"].tolist() == [[1, 2], [0, 4]]
     assert batch["labels"].tolist() == [[3, -100], [5, 6]]
+
+
+def test_checkpointed_frozen_embedding_keeps_adapter_grad():
+    class FrozenEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed_tokens = torch.nn.Embedding(8, 4)
+            self.proj = torch.nn.Linear(4, 4)
+            for parameter in self.parameters():
+                parameter.requires_grad_(False)
+
+        def get_input_embeddings(self):
+            return self.embed_tokens
+
+        def forward(self, input_ids):
+            hidden = self.embed_tokens(input_ids)
+            return torch.utils.checkpoint.checkpoint(self.proj, hidden, use_reentrant=False)
+
+    class Adapter(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.base = FrozenEncoder()
+            self.lora = torch.nn.Linear(4, 4, bias=False)
+
+        def get_base_model(self):
+            return self.base
+
+        def get_input_embeddings(self):
+            return self.base.embed_tokens
+
+        def forward(self, input_ids):
+            hidden = self.base(input_ids)
+            return (hidden + self.lora(hidden)).sum()
+
+    model = Adapter()
+    args = type("Args", (), {"gradient_checkpointing": True})()
+    _prepare_gradient_checkpointing(model, args)
+    loss = model(torch.tensor([[1, 2, 3]]))
+    loss.backward()
+    assert model.lora.weight.grad is not None
+    assert model.lora.weight.grad.abs().sum() > 0
 
 
 def test_multi_gpu_relaunch_is_not_taken_when_rank_is_absent(monkeypatch):

@@ -34,9 +34,7 @@ def run(args) -> Path:
     data_dir = _prepare_data(args, output_dir)
     tokenizer = AutoTokenizer.from_pretrained(args.model_hf_id, trust_remote_code=True)
     model = _load_model(args)
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
-        model.config.use_cache = False
+    _prepare_gradient_checkpointing(model, args)
     processor = get_processor(inference=False)
     train_dataset, train_raw = load_and_process_translation_dataset(
         data_dir, "train", tokenizer, processor, [args.src_lang], [args.tgt_lang],
@@ -239,7 +237,65 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
     kwargs["save_strategy"] = args.save_strategy
     if args.num_workers > 0 and "dataloader_prefetch_factor" in signature.parameters:
         kwargs["dataloader_prefetch_factor"] = 2
+    if args.gradient_checkpointing and "gradient_checkpointing_kwargs" in signature.parameters:
+        kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
     return Seq2SeqTrainingArguments(**kwargs)
+
+
+def _prepare_gradient_checkpointing(model, args) -> None:
+    """Keep LoRA grads when the frozen base is checkpointed.
+
+    Checkpointing only reconnects the backward graph if an activation requires
+    grad. A frozen IndicTrans2 embedding does not, so full_lora / lora backward
+    dies with "does not require grad and does not have a grad_fn".
+    """
+    if not args.gradient_checkpointing:
+        return
+    if getattr(model, "config", None) is not None:
+        model.config.use_cache = False
+    _mark_embedding_outputs_trainable(model)
+    enable = getattr(model, "gradient_checkpointing_enable", None)
+    if enable is None:
+        return
+    params = inspect.signature(enable).parameters
+    accepts_kwargs = "gradient_checkpointing_kwargs" in params or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
+    if accepts_kwargs:
+        enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    else:
+        enable()
+
+
+def _mark_embedding_outputs_trainable(model) -> None:
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    modules = []
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
+    for owner in (model, base):
+        getter = getattr(owner, "get_input_embeddings", None)
+        if getter is not None:
+            modules.append(getter())
+        for part_name in ("get_encoder", "get_decoder"):
+            part_getter = getattr(owner, part_name, None)
+            if part_getter is None:
+                continue
+            part = part_getter()
+            embed_getter = getattr(part, "get_input_embeddings", None)
+            if embed_getter is not None:
+                modules.append(embed_getter())
+            modules.append(getattr(part, "embed_tokens", None))
+
+    def _hook(_module, _inputs, output):
+        if torch.is_tensor(output):
+            output.requires_grad_(True)
+
+    seen: set[int] = set()
+    for module in modules:
+        if module is None or id(module) in seen:
+            continue
+        seen.add(id(module))
+        module.register_forward_hook(_hook)
 
 
 def _accepts_processing_class() -> bool:
