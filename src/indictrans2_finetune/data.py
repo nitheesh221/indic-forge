@@ -53,10 +53,37 @@ def _read_table(path: Path) -> Iterator[dict]:
             yield {key.strip(): (value or "").strip() for key, value in row.items() if key}
 
 
+def _read_json_document(path: Path) -> Iterator[dict]:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        yield from _read_jsonl(path)
+        return
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = None
+        for key in ("data", "examples", "rows"):
+            if isinstance(payload.get(key), list):
+                rows = payload[key]
+                break
+        if rows is None:
+            rows = [payload]
+    else:
+        raise ValueError(f"{path} must be a JSON object, a JSON array, or JSONL")
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"{path} item {index} must be a JSON object")
+        yield row
+
+
 def iter_rows(path: Path) -> Iterator[dict]:
     suffix = path.suffix.lower()
     if suffix in {".jsonl", ".json"}:
-        yield from _read_jsonl(path)
+        yield from _read_json_document(path)
     elif suffix in {".csv", ".tsv", ".tab"}:
         yield from _read_table(path)
     else:
@@ -85,8 +112,8 @@ def rows_to_pairs(
     for row in rows:
         src_lang = _pick(row, "src_lang", "source_lang", "src_code") or src_lang_default
         tgt_lang = _pick(row, "tgt_lang", "target_lang", "tgt_code") or tgt_lang_default
-        src = _pick(row, "src", "source", "en", "english", "sentence_src")
-        tgt = _pick(row, "tgt", "target", "hi", "hindi", "sentence_tgt", "translation")
+        src = _pick(row, "src", "source", "src_text", "source_text", "en", "english", "sentence_src")
+        tgt = _pick(row, "tgt", "target", "tgt_text", "target_text", "hi", "hindi", "sentence_tgt", "translation")
 
         if src_lang and src_lang in row and src is None:
             src = str(row[src_lang]).strip() or None

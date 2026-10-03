@@ -63,6 +63,25 @@ def test_mismatched_files_raise(tmp_path: Path):
         validate_official_dir(tmp_path, "dev", ["eng_Latn"], ["hin_Deva"])
 
 
+def test_src_text_json_array(tmp_path: Path):
+    path = tmp_path / "train.json"
+    path.write_text(
+        """[
+  {
+    "src_lang": "asm_Beng",
+    "tgt_lang": "eng_Latn",
+    "src_text": "নৱাগত ৰিয়া চক্ৰৱৰ্তীক নিয়োগ কৰা হৈছে।",
+    "tgt_text": "Newcomer Rhea Chakraborty has been hired."
+  }
+]
+""",
+        encoding="utf-8",
+    )
+    report = prepare_file(path, tmp_path / "out", "train")
+    assert report.skipped == 0
+    assert report.pairs["train"]["asm_Beng-eng_Latn"] == 1
+
+
 def test_rows_to_pairs_flores_keys():
     pairs, skipped = rows_to_pairs(
         [{"eng_Latn": "Hello", "hin_Deva": "नमस्ते", "src_lang": "eng_Latn", "tgt_lang": "hin_Deva"}]
