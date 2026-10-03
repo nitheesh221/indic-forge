@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,22 +13,64 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from indictrans2_finetune.langs import default_model, normalize_lang
 from indictrans2_finetune.toolkit import get_processor
 
+# save_pretrained stores these in tokenizer_config.json. IndicTransTokenizer
+# also passes them explicitly, so a reloaded merged model raises
+# "multiple values for keyword argument 'src_vocab_file'".
+_SAVED_TOKENIZER_KEYS = ("src_vocab_file", "tgt_vocab_file", "src_spm", "tgt_spm")
+
 
 def _device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def tokenizer_source(model_name: str) -> str:
+    """Use the original Hub tokenizer for a merged full or full_lora directory."""
+    path = Path(model_name)
+    for candidate in (path, path.parent):
+        meta_path = candidate / "finetune_meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        base = payload.get("model_hf_id")
+        if isinstance(base, str) and base.strip():
+            return base
+    return model_name
+
+
+def sanitize_saved_tokenizer(directory: Path) -> None:
+    config_path = Path(directory) / "tokenizer_config.json"
+    if not config_path.is_file():
+        return
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    if not any(key in payload for key in _SAVED_TOKENIZER_KEYS):
+        return
+    for key in _SAVED_TOKENIZER_KEYS:
+        payload.pop(key, None)
+    config_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _load_seq2seq(model_name: str, dtype: torch.dtype):
+    kwargs = {
+        "trust_remote_code": True,
+        "attn_implementation": "eager",
+        "low_cpu_mem_usage": True,
+    }
+    try:
+        return AutoModelForSeq2SeqLM.from_pretrained(model_name, dtype=dtype, **kwargs)
+    except TypeError as exc:
+        if "dtype" not in str(exc):
+            raise
+        return AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=dtype, **kwargs)
+
+
 @lru_cache(maxsize=2)
 def load_pipeline(model_name: str, adapter: str | None = None):
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source(model_name), trust_remote_code=True)
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        torch_dtype=dtype,
-        attn_implementation="eager",
-        low_cpu_mem_usage=True,
-    )
+    model = _load_seq2seq(model_name, dtype)
     if adapter:
         model = PeftModel.from_pretrained(model, adapter)
     model.to(_device())

@@ -13,6 +13,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, Seq2SeqTrainer, S
 
 from indictrans2_finetune.callbacks import CsvLogCallback, TopNCheckpointCallback, TranslationMetricsCallback
 from indictrans2_finetune.config import maybe_relaunch, parse_args
+from indictrans2_finetune.infer import sanitize_saved_tokenizer
 from indictrans2_finetune.data import prepare_file
 from indictrans2_finetune.langs import normalize_lang
 from indictrans2_finetune.toolkit import get_collator, get_processor
@@ -193,6 +194,7 @@ def _save_final(model, tokenizer, args) -> Path:
         model = model.merge_and_unload()
     model.save_pretrained(final_dir)
     tokenizer.save_pretrained(final_dir)
+    sanitize_saved_tokenizer(final_dir)
     return final_dir
 
 

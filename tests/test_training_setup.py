@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 import torch
 
 from indictrans2_finetune.callbacks import TopNCheckpointCallback, retention_count
+from indictrans2_finetune.infer import sanitize_saved_tokenizer, tokenizer_source
 from indictrans2_finetune.runner import _prepare_gradient_checkpointing
 from indictrans2_finetune.toolkit import IndicBatchCollator
 from indictrans2_finetune.config import maybe_relaunch, parse_args
@@ -142,6 +144,33 @@ def test_batch_collator_pads_without_toolkit_helper():
     )
     assert batch["input_ids"].tolist() == [[1, 2], [0, 4]]
     assert batch["labels"].tolist() == [[3, -100], [5, 6]]
+
+
+def test_merged_model_uses_hub_tokenizer(tmp_path: Path):
+    model_dir = tmp_path / "final_model"
+    model_dir.mkdir()
+    (model_dir / "finetune_meta.json").write_text(
+        '{"model_hf_id": "ai4bharat/indictrans2-indic-en-dist-200M"}\n',
+        encoding="utf-8",
+    )
+    assert tokenizer_source(str(model_dir)) == "ai4bharat/indictrans2-indic-en-dist-200M"
+    assert tokenizer_source("ai4bharat/indictrans2-indic-en-dist-200M") == (
+        "ai4bharat/indictrans2-indic-en-dist-200M"
+    )
+
+
+def test_saved_tokenizer_config_drops_duplicate_vocab_keys(tmp_path: Path):
+    config = {
+        "src_vocab_file": "dict.SRC.json",
+        "tgt_vocab_file": "dict.TGT.json",
+        "src_spm": "model.SRC",
+        "bos_token": "<s>",
+    }
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps(config), encoding="utf-8")
+    sanitize_saved_tokenizer(tmp_path)
+    saved = json.loads((tmp_path / "tokenizer_config.json").read_text(encoding="utf-8"))
+    assert "src_vocab_file" not in saved
+    assert saved["bos_token"] == "<s>"
 
 
 def test_checkpointed_frozen_embedding_keeps_adapter_grad():
