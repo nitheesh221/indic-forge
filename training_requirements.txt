@@ -226,14 +226,18 @@ pytest>=8.0.0
 #   4 BERTScore  Additional semantic evaluation (multilingual encoder)
 #   5 METEOR     Additional lexical/semantic (weaker on Indic WordNet)
 #   6 TER        Edit-distance / error analysis
+#   7 Exact match Strict sentence-level diagnostic for short/templated text
 #
-# --eval_metrics  nargs=+  default: all six in that order
+# --eval_metrics  nargs=+  default: all seven in that order
 #   chrf2pp       sacrebleu CHRF(word_order=2) = chrF++
 #   comet         Unbabel/wmt22-comet-da (download on first eval)
 #   bleu          sacrebleu BLEU tokenize=flores200
 #   bertscore     bert-score, model xlm-roberta-large (Indic-capable)
 #   meteor        evaluate/nltk METEOR
 #   ter           sacrebleu TER
+#   exact_match   percentage of hypotheses exactly matching references after
+#                 Unicode NFC normalization, whitespace collapse, and strip;
+#                 case and punctuation remain significant
 #
 # Checkpoint selection stays eval_loss (not these).
 # If COMET/BERTScore fail (no GPU / download), still write sacrebleu metrics.
