@@ -224,27 +224,25 @@ def create_app() -> FastAPI:
         src = normalize_lang(src)
         tgt = normalize_lang(tgt)
         model = default_model(src, tgt, size)
-        command = f"""# 1. Convert your parallel data
-indictrans2-ft prepare \\
-  --train data/sample/train.jsonl \\
-  --dev data/sample/dev.jsonl \\
-  --src-lang {src} --tgt-lang {tgt} \\
-  --output-dir data/prepared
+        command = f"""# Fine-tune LoRA on {model}
+python train.py \\
+  --gpu_ids 0 \\
+  --model_hf_id {model} \\
+  --train_mode lora \\
+  --train_json data/sample/train.jsonl \\
+  --val_json data/sample/dev.jsonl \\
+  --src_lang {src} --tgt_lang {tgt} \\
+  --output_dir it2_out/lora \\
+  --final_model_dir it2_out/lora/final_model \\
+  --epochs 2 --learning_rate 2e-4 --bf16 \\
+  --eval_strategy epoch --save_strategy epoch \\
+  --metric_for_best_model eval_loss --top_n_checkpoints 3
 
-# 2. Fine-tune LoRA on {model}
-indictrans2-ft train \\
-  --data-dir data/prepared \\
-  --src-lang {src} --tgt-lang {tgt} \\
-  --model {model} \\
-  --output-dir outputs/lora \\
-  --max-steps {int(steps)} \\
-  --batch-size 4 --grad-accum-steps 4
-
-# 3. Translate with the adapter
+# Translate with the adapter
 indictrans2-ft translate \\
   --text "{SAMPLE_EN}" \\
   --src-lang {src} --tgt-lang {tgt} \\
-  --adapter outputs/lora
+  --adapter it2_out/lora/final_model
 """
         return {"model": model, "command": command}
 

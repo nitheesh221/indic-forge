@@ -20,5 +20,6 @@ def test_recipe_english_hindi():
     assert response.status_code == 200
     payload = response.json()
     assert "indictrans2-en-indic-dist-200M" in payload["model"]
-    assert "--src-lang eng_Latn" in payload["command"]
-    assert "--tgt-lang hin_Deva" in payload["command"]
+    assert "--src_lang eng_Latn" in payload["command"]
+    assert "--tgt_lang hin_Deva" in payload["command"]
+    assert "python train.py" in payload["command"]

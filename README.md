@@ -1,15 +1,15 @@
-# IndicTrans2 LoRA fine-tune
+# IndicTrans2 fine-tuning
 
-Fine-tune [AI4Bharat IndicTrans2](https://github.com/AI4Bharat/IndicTrans2) on your own parallel text with LoRA, using the Hugging Face checkpoints and `IndicTransToolkit` preprocessing.
+Fine-tune [AI4Bharat IndicTrans2](https://github.com/AI4Bharat/IndicTrans2) on your own parallel text. Training supports full fine-tuning, wide LoRA, LoRA, and QLoRA on the Hugging Face checkpoints, with `IndicTransToolkit` preprocessing.
 
 This repo follows the official data layout from [`huggingface_interface/train_lora.py`](https://github.com/AI4Bharat/IndicTrans2/tree/main/huggingface_interface): one folder per `src-tgt` pair, sentence-aligned `train.*` / `dev.*` files, FLORES-200 tags such as `eng_Latn` and `hin_Deva`.
 
 ## What you get
 
-- Convert JSONL or CSV into that layout
-- Pick the right checkpoint (`en-indic`, `indic-en`, or `indic-indic`; distilled 200M or 1B)
-- LoRA train with the same target modules as the official script (`q_proj,k_proj`)
-- Translate and score BLEU / chrF with or without an adapter
+- Convert JSONL or CSV into that layout, or let `train.py` convert it
+- Pick the right checkpoint (`en-indic`, `indic-en`, or `indic-indic`; distilled or 1B)
+- Train with `full`, `full_lora`, `lora`, or `qlora`
+- Score chrF++, COMET, SacreBLEU, BERTScore, METEOR, TER, and exact match
 - A small web UI for the recipe, data conversion, and a translation box
 - A 40/8 English–Hindi **public-services** sample (Aadhaar, UPI, PM-Kisan, GST, …) so you can dry-run the pipeline
 
@@ -58,32 +58,66 @@ data/prepared/
 
 Use `indictrans2-ft langs` for every FLORES tag the models accept.
 
-## 2. Fine-tune LoRA
+## 2. Fine-tune
+
+`train.py` is the training entry point. It accepts `full`, `full_lora`, `lora`, and `qlora`. `full_qlora` is rejected.
+
+| Mode | What trains | `--final_model_dir` |
+| --- | --- | --- |
+| `lora` | `q_proj,k_proj` | Adapter |
+| `qlora` | 4-bit base + same LoRA | Adapter |
+| `full_lora` | LoRA on attention and FFN, then merged | Full model |
+| `full` | Every parameter | Full model |
+
+Pass `--adapter_path` to continue an adapter. With `--train_mode full`, that adapter is merged before full fine-tuning.
+
+One GPU:
 
 ```bash
-indictrans2-ft train \
-  --data-dir data/prepared \
-  --src-lang eng_Latn \
-  --tgt-lang hin_Deva \
-  --output-dir outputs/lora \
-  --model-size distilled \
-  --max-steps 400 \
-  --batch-size 4 \
-  --grad-accum-steps 4 \
-  --learning-rate 2e-4
+python train.py \
+  --gpu_ids 0 \
+  --model_hf_id ai4bharat/indictrans2-en-indic-dist-200M \
+  --train_mode lora \
+  --train_json data/sample/train.jsonl \
+  --val_json data/sample/dev.jsonl \
+  --src_lang eng_Latn \
+  --tgt_lang hin_Deva \
+  --output_dir it2_out/lora \
+  --final_model_dir it2_out/lora/final_model \
+  --epochs 2 \
+  --learning_rate 2e-4 \
+  --bf16 \
+  --gradient_checkpointing \
+  --eval_strategy epoch \
+  --save_strategy epoch \
+  --metric_for_best_model eval_loss \
+  --top_n_checkpoints 3
 ```
 
-Defaults match the official recipe: inverse-sqrt schedule, AdamW β2=0.98, LoRA r=16 / α=32, early stopping on `eval_loss`. Switch `--model-size base` for the 1B models, or pass `--model ai4bharat/indictrans2-en-indic-1B`.
+Several GPUs — do not also pass `--gpu_ids`:
 
-For a real domain, plan on thousands of clean pairs, not the 40-line sample. Keep a held-out `dev` set in the **same domain**.
+```bash
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py \
+  --model_hf_id ai4bharat/indictrans2-en-indic-dist-200M \
+  --train_mode lora \
+  --train_json data/sample/train.jsonl \
+  --val_json data/sample/dev.jsonl \
+  --src_lang eng_Latn --tgt_lang hin_Deva \
+  --output_dir it2_out/lora \
+  --bf16 --eval_strategy epoch --save_strategy epoch
+```
 
-| Direction | Distilled (faster) | Base (better) |
+Ready-made wrappers: `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, `scripts/train_full.sh`.
+
+If you omit `--learning_rate`, LoRA and QLoRA use `2e-4`; full and full_lora use `2e-5`. QLoRA defaults to `--optim paged_adamw_32bit`, NF4, and bfloat16 compute. Checkpoints are ranked only by `eval_loss`, `eval_entropy`, or `eval_mean_token_accuracy`.
+
+| Direction | Distilled | Base |
 | --- | --- | --- |
 | English → Indic | `ai4bharat/indictrans2-en-indic-dist-200M` | `ai4bharat/indictrans2-en-indic-1B` |
 | Indic → English | `ai4bharat/indictrans2-indic-en-dist-200M` | `ai4bharat/indictrans2-indic-en-1B` |
 | Indic → Indic | `ai4bharat/indictrans2-indic-indic-dist-320M` | `ai4bharat/indictrans2-indic-indic-1B` |
 
-Only adapter weights are saved under `--output-dir` (plus tokenizer files). Load them on top of the same base checkpoint.
+The 40-line sample only proves the pipeline. Use thousands of clean in-domain pairs for a real run.
 
 ## 3. Translate and evaluate
 
@@ -92,15 +126,27 @@ indictrans2-ft translate \
   --text "Your Aadhaar OTP is valid for 10 minutes and should not be shared." \
   --src-lang eng_Latn \
   --tgt-lang hin_Deva \
-  --adapter outputs/lora
+  --adapter it2_out/lora/final_model
 
 indictrans2-ft eval \
   --data-dir data/prepared \
   --src-lang eng_Latn \
   --tgt-lang hin_Deva \
   --split dev \
-  --adapter outputs/lora
+  --adapter it2_out/lora/final_model
 ```
+
+Training writes `eval_metrics.csv`, `eval_samples.csv`, and `training_logs.csv` under `--output_dir`. Reported translation metrics, in priority order:
+
+1. chrF++
+2. COMET (`Unbabel/wmt22-comet-da`)
+3. SacreBLEU (`tokenize=flores200`)
+4. BERTScore (`xlm-roberta-large`)
+5. METEOR
+6. TER
+7. Exact match
+
+COMET and BERTScore download models on first use. A failure in either one is recorded, and the other metrics are still written. None of these seven choose the best checkpoint.
 
 ## Playground UI
 
@@ -123,7 +169,7 @@ These cover language routing and data conversion. They do not download the 200M/
 - **Direction must match the checkpoint.** English→Hindi needs `en-indic`, not `indic-en`.
 - **Preprocessing is required.** Training and inference run `IndicProcessor` the same way as the official LoRA script (including `is_target=True` on the target side).
 - **fp16 is used only on CUDA.** CPU training is possible but not useful for the 1B models.
-- **Do not expect the 40-sentence sample to beat the base model.** It is there to prove the pipeline, not to ship a production adapter.
+- **LoRA defaults are r=8, alpha=16, dropout=0.05.** `lora` and `qlora` target `q_proj,k_proj`. `full_lora` targets `q_proj,k_proj,v_proj,out_proj,fc1,fc2` and the saved result is a merged model.
 - RoPE long-context variants live under [prajdabre's IndicTrans2-RoPE collection](https://huggingface.co/collections/prajdabre/indictrans2-rope-6742ddac669a05db0804db35) if you need 2k tokens.
 
 ## License

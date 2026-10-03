@@ -42,51 +42,15 @@ def prepare_cmd(
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-@app.command("train")
-def train_cmd(
-    data_dir: Path = typer.Option(..., exists=True, file_okay=False),
-    src_lang: str = typer.Option(..., help="Source FLORES tag, e.g. eng_Latn"),
-    tgt_lang: str = typer.Option(..., help="Target FLORES tag, e.g. hin_Deva"),
-    output_dir: Path = typer.Option(Path("outputs/lora")),
-    model: Optional[str] = typer.Option(None, help="HF model id; inferred from direction if omitted"),
-    model_size: str = typer.Option("distilled", help="distilled or base"),
-    max_steps: int = typer.Option(200),
-    batch_size: int = typer.Option(4),
-    grad_accum_steps: int = typer.Option(4),
-    learning_rate: float = typer.Option(2e-4),
-    lora_r: int = typer.Option(16),
-    lora_alpha: int = typer.Option(32),
-    lora_target_modules: str = typer.Option("q_proj,k_proj"),
-    save_steps: int = typer.Option(50),
-    eval_steps: int = typer.Option(50),
-    warmup_steps: int = typer.Option(50),
-) -> None:
-    """Run LoRA fine-tuning (GPU strongly recommended)."""
-    from indictrans2_finetune.train import TrainConfig, train
+@app.command(
+    "train",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def train_cmd(ctx: typer.Context) -> None:
+    """Run train.py. Example: indictrans2-ft train --gpu_ids 0 --model_hf_id ..."""
+    from indictrans2_finetune.runner import main
 
-    src = normalize_lang(src_lang)
-    tgt = normalize_lang(tgt_lang)
-    resolved = model or default_model(src, tgt, model_size)
-    typer.echo(f"Base model: {resolved}")
-    train(
-        TrainConfig(
-            data_dir=data_dir,
-            output_dir=output_dir,
-            src_langs=[src],
-            tgt_langs=[tgt],
-            model=resolved,
-            max_steps=max_steps,
-            batch_size=batch_size,
-            grad_accum_steps=grad_accum_steps,
-            learning_rate=learning_rate,
-            lora_r=lora_r,
-            lora_alpha=lora_alpha,
-            lora_target_modules=lora_target_modules,
-            save_steps=save_steps,
-            eval_steps=eval_steps,
-            warmup_steps=warmup_steps,
-        )
-    )
+    raise typer.Exit(main(ctx.args))
 
 
 @app.command("translate")

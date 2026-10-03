@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sacrebleu.metrics import BLEU, CHRF
-
 from indictrans2_finetune.data import validate_official_dir
 from indictrans2_finetune.infer import maybe_adapter_base, translate_batch
 from indictrans2_finetune.langs import default_model, normalize_lang
+from indictrans2_finetune.metrics_mt import METRIC_ORDER, score_translations
 
 
 def evaluate_split(
@@ -35,8 +34,7 @@ def evaluate_split(
     predictions = translate_batch(
         sources, src_lang, tgt_lang, model_name=model_name, adapter=adapter
     )
-    bleu = BLEU().corpus_score(predictions, [references]).score
-    chrf = CHRF().corpus_score(predictions, [references]).score
+    scores, errors = score_translations(sources, predictions, references, list(METRIC_ORDER))
     samples = [
         {"src": src, "ref": ref, "hyp": hyp}
         for src, ref, hyp in zip(sources[:5], references[:5], predictions[:5])
@@ -45,8 +43,8 @@ def evaluate_split(
         "pair": f"{src_lang}-{tgt_lang}",
         "split": split,
         "n": counts[f"{src_lang}-{tgt_lang}"] if not max_examples else len(sources),
-        "bleu": round(bleu, 2),
-        "chrf": round(chrf, 2),
+        "metrics": scores,
+        "metric_errors": errors,
         "model": model_name,
         "adapter": adapter,
         "samples": samples,
