@@ -65,7 +65,7 @@ def translate_batch(
     with torch.inference_mode():
         generated = model.generate(
             **inputs,
-            use_cache=True,
+            use_cache=False,
             min_length=0,
             max_length=max_length,
             num_beams=num_beams,

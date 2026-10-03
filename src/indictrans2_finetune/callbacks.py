@@ -66,17 +66,28 @@ class TranslationMetricsCallback(TrainerCallback):
             return
         model = kwargs.get("model") or self.trainer_box.get("model")
         tokenizer = self.trainer_box["tokenizer"]
-        hypotheses = generate_translations(
-            model,
-            tokenizer,
-            self.processor,
-            self.sources,
-            self.user_args.src_lang,
-            self.user_args.tgt_lang,
-            self.user_args.eval_max_new_tokens,
-            self.user_args.generation_num_beams,
-            self.user_args.eval_batch_size,
-        )
+        try:
+            hypotheses = generate_translations(
+                model,
+                tokenizer,
+                self.processor,
+                self.sources,
+                self.user_args.src_lang,
+                self.user_args.tgt_lang,
+                self.user_args.eval_max_new_tokens,
+                self.user_args.generation_num_beams,
+                self.user_args.eval_batch_size,
+            )
+        except Exception as exc:  # noqa: BLE001 — translation scores must not abort training
+            output = Path(self.user_args.output_dir)
+            _append_row(
+                output / self.user_args.eval_metrics_csv,
+                {
+                    "step": state.global_step,
+                    "metric_errors": f"generation failed: {type(exc).__name__}: {exc}",
+                },
+            )
+            return
         scores, errors = score_translations(
             self.sources,
             hypotheses,
@@ -125,6 +136,7 @@ def generate_translations(
         with torch.inference_mode():
             generated = model.generate(
                 **inputs,
+                use_cache=False,
                 num_beams=num_beams,
                 max_length=max_length,
                 min_length=0,
