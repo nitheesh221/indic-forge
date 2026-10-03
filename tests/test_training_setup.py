@@ -6,13 +6,16 @@ import pytest
 import torch
 
 from indictrans2_finetune.callbacks import TopNCheckpointCallback, retention_count
-from indictrans2_finetune.infer import place_model, sanitize_saved_tokenizer, tokenizer_source
+from indictrans2_finetune.config import maybe_relaunch, parse_args
+from indictrans2_finetune.infer import (
+    overlay_checkpoint,
+    sanitize_saved_tokenizer,
+    tokenizer_source,
+)
+from indictrans2_finetune.metrics_mt import exact_match, normalize_exact, score_translations
 from indictrans2_finetune.runner import _prepare_gradient_checkpointing
 from indictrans2_finetune.toolkit import IndicBatchCollator
-from indictrans2_finetune.config import maybe_relaunch, parse_args
-from indictrans2_finetune.metrics_mt import exact_match, normalize_exact, score_translations
 from indictrans2_finetune.train import preprocess_logits_for_metrics, token_stats
-
 
 BASE = "ai4bharat/indictrans2-en-indic-dist-200M"
 
@@ -173,17 +176,30 @@ def test_saved_tokenizer_config_drops_duplicate_vocab_keys(tmp_path: Path):
     assert saved["bos_token"] == "<s>"
 
 
-def test_meta_checkpoint_is_materialized_before_move(tmp_path: Path):
-    class Box(torch.nn.Module):
+def test_merged_checkpoint_keeps_base_buffers_and_ties_output(tmp_path: Path):
+    class Decoder(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.weight = torch.nn.Parameter(torch.empty(2, 2, device="meta"))
+            self.embed_tokens = torch.nn.Embedding(3, 2)
+            self.register_buffer("positions", torch.tensor([7.0, 8.0]), persistent=False)
 
-    tensor = torch.arange(4, dtype=torch.float32).reshape(2, 2)
-    torch.save({"weight": tensor}, tmp_path / "pytorch_model.bin")
-    placed = place_model(Box(), str(tmp_path), torch.device("cpu"))
-    assert not placed.weight.is_meta
-    assert torch.equal(placed.weight.detach().cpu(), tensor)
+    class Seq2Seq(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.decoder = Decoder()
+            self.lm_head = torch.nn.Linear(2, 3, bias=False)
+
+        def get_decoder(self):
+            return self.decoder
+
+    trained = torch.arange(6, dtype=torch.float32).reshape(3, 2)
+    torch.save({"decoder.embed_tokens.weight": trained}, tmp_path / "pytorch_model.bin")
+    model = Seq2Seq()
+    report = overlay_checkpoint(model, tmp_path)
+    assert torch.equal(model.decoder.embed_tokens.weight, trained)
+    assert torch.equal(model.lm_head.weight, trained)
+    assert torch.equal(model.decoder.positions, torch.tensor([7.0, 8.0]))
+    assert "lm_head.weight" in report["missing"]
 
 
 def test_checkpointed_frozen_embedding_keeps_adapter_grad():

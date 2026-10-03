@@ -79,41 +79,45 @@ def _load_state_dict(directory: Path) -> dict[str, torch.Tensor]:
     raise FileNotFoundError(f"No model weights found in {directory}")
 
 
-def _tie(model) -> None:
-    tie = getattr(model, "tie_weights", None)
-    if not callable(tie):
-        return
-    try:
-        tie()
-    except Exception:
-        return
+def overlay_checkpoint(model, directory: Path) -> dict[str, list[str]]:
+    """Copy a merged checkpoint's tensors into an initialized base model.
 
-
-def place_model(model, model_name: str, device: torch.device):
-    """Move a loaded model to `device`.
-
-    IndicTrans2 checkpoints omit tied embeddings. Loading with the low-memory
-    path leaves those parameters on the meta device, and `.to()` then fails.
+    Saved IndicTrans2 checkpoints drop tied output weights and the sinusoidal
+    position tables. Those must come from a properly built base model; loading
+    them from an empty or meta-initialized model gives garbage translations.
     """
-    _tie(model)
-    if _has_meta(model):
-        directory = Path(model_name)
-        if not directory.is_dir():
-            raise RuntimeError(f"{model_name} still has meta tensors and is not a local checkpoint.")
-        state = _load_state_dict(directory)
-        model.to_empty(device="cpu")
-        model.load_state_dict(state, strict=False)
-        _tie(model)
-        if _has_meta(model):
-            raise RuntimeError(f"Parameters in {model_name} stayed on the meta device after loading weights.")
-    return model.to(device)
+    state = _load_state_dict(Path(directory))
+    own = model.state_dict()
+    missing = [key for key in own if key not in state]
+    unexpected = [key for key in state if key not in own]
+    mismatched = [
+        key for key in state if key in own and tuple(state[key].shape) != tuple(own[key].shape)
+    ]
+    if mismatched:
+        raise RuntimeError(f"Checkpoint shapes do not match the base model: {mismatched[:5]}")
+    model.load_state_dict({key: state[key] for key in state if key in own}, strict=False)
+    _copy_output_projection(model, state)
+    return {"missing": missing, "unexpected": unexpected}
+
+
+def _copy_output_projection(model, state: dict[str, torch.Tensor]) -> None:
+    head = getattr(model, "lm_head", None)
+    if head is None or "lm_head.weight" in state:
+        return
+    decoder = model.get_decoder() if hasattr(model, "get_decoder") else None
+    embed = getattr(decoder, "embed_tokens", None)
+    if embed is None or head.weight is embed.weight:
+        return
+    if head.weight.shape != embed.weight.shape:
+        return
+    with torch.no_grad():
+        head.weight.copy_(embed.weight)
 
 
 def _load_seq2seq(model_name: str, dtype: torch.dtype):
     kwargs = {
         "trust_remote_code": True,
         "attn_implementation": "eager",
-        "low_cpu_mem_usage": False,
     }
     try:
         return AutoModelForSeq2SeqLM.from_pretrained(model_name, dtype=dtype, **kwargs)
@@ -123,16 +127,29 @@ def _load_seq2seq(model_name: str, dtype: torch.dtype):
         return AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=dtype, **kwargs)
 
 
+def _load_model(model_name: str, dtype: torch.dtype):
+    base = tokenizer_source(model_name)
+    if base == model_name:
+        model = _load_seq2seq(model_name, dtype)
+        if _has_meta(model):
+            raise RuntimeError(
+                f"{model_name} loaded with empty weights. Train it with this repo so "
+                "finetune_meta.json records the base checkpoint."
+            )
+        return model
+    model = _load_seq2seq(base, dtype)
+    overlay_checkpoint(model, Path(model_name))
+    return model
+
+
 @lru_cache(maxsize=2)
 def load_pipeline(model_name: str, adapter: str | None = None):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source(model_name), trust_remote_code=True)
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    model = _load_seq2seq(model_name, dtype)
-    device = _device()
-    model = place_model(model, model_name, device)
+    model = _load_model(model_name, dtype)
     if adapter:
         model = PeftModel.from_pretrained(model, adapter)
-        model = place_model(model, adapter, device)
+    model.to(_device())
     model.eval()
     processor = get_processor(inference=True)
     return tokenizer, model, processor
