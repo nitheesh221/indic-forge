@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from indictrans2_finetune.callbacks import TopNCheckpointCallback, retention_count
+from indictrans2_finetune.toolkit import IndicBatchCollator
 from indictrans2_finetune.config import maybe_relaunch, parse_args
 from indictrans2_finetune.metrics_mt import exact_match, normalize_exact, score_translations
 from indictrans2_finetune.train import preprocess_logits_for_metrics, token_stats
@@ -119,6 +120,27 @@ def test_top_n_keeps_lower_loss(tmp_path: Path):
     assert first.exists()
     assert not second.exists()
     assert retention_count(3, 1) == 1
+
+
+def test_batch_collator_pads_without_toolkit_helper():
+    class Tokenizer:
+        padding_side = "right"
+        pad_token_id = 0
+
+        def pad(self, features, padding, pad_to_multiple_of, return_tensors):
+            assert self.padding_side == "left"
+            width = max(len(feature["input_ids"]) for feature in features)
+            rows = [[0] * (width - len(feature["input_ids"])) + list(feature["input_ids"]) for feature in features]
+            return {"input_ids": torch.tensor(rows)}
+
+    batch = IndicBatchCollator(Tokenizer(), pad_to_multiple_of=None)(
+        [
+            {"input_ids": [1, 2], "labels": [3]},
+            {"input_ids": [4], "labels": [5, 6]},
+        ]
+    )
+    assert batch["input_ids"].tolist() == [[1, 2], [0, 4]]
+    assert batch["labels"].tolist() == [[3, -100], [5, 6]]
 
 
 def test_multi_gpu_relaunch_is_not_taken_when_rank_is_absent(monkeypatch):
