@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from indictrans2_finetune.callbacks import TopNCheckpointCallback, retention_count
-from indictrans2_finetune.infer import sanitize_saved_tokenizer, tokenizer_source
+from indictrans2_finetune.infer import place_model, sanitize_saved_tokenizer, tokenizer_source
 from indictrans2_finetune.runner import _prepare_gradient_checkpointing
 from indictrans2_finetune.toolkit import IndicBatchCollator
 from indictrans2_finetune.config import maybe_relaunch, parse_args
@@ -171,6 +171,19 @@ def test_saved_tokenizer_config_drops_duplicate_vocab_keys(tmp_path: Path):
     saved = json.loads((tmp_path / "tokenizer_config.json").read_text(encoding="utf-8"))
     assert "src_vocab_file" not in saved
     assert saved["bos_token"] == "<s>"
+
+
+def test_meta_checkpoint_is_materialized_before_move(tmp_path: Path):
+    class Box(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.empty(2, 2, device="meta"))
+
+    tensor = torch.arange(4, dtype=torch.float32).reshape(2, 2)
+    torch.save({"weight": tensor}, tmp_path / "pytorch_model.bin")
+    placed = place_model(Box(), str(tmp_path), torch.device("cpu"))
+    assert not placed.weight.is_meta
+    assert torch.equal(placed.weight.detach().cpu(), tensor)
 
 
 def test_checkpointed_frozen_embedding_keeps_adapter_grad():
