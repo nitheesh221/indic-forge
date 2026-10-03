@@ -140,6 +140,18 @@ def _langs_from_dir(data_dir: Path) -> tuple[str, str]:
 def _load_model(args):
     kwargs = {"trust_remote_code": True, "attn_implementation": "eager"}
     if args.train_mode == "qlora":
+        try:
+            from importlib.metadata import version
+
+            import bitsandbytes  # noqa: F401
+
+            version("bitsandbytes")
+        except Exception as exc:
+            raise SystemExit(
+                "QLoRA needs a complete bitsandbytes install in this virtual environment.\n"
+                "  pip install -U bitsandbytes\n"
+                f"Check failed: {exc}"
+            ) from exc
         from transformers import BitsAndBytesConfig
 
         dtype = torch.bfloat16 if args.bnb_compute_dtype == "bfloat16" else torch.float16
