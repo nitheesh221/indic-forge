@@ -227,7 +227,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
 #   --eval-metrics chrf2pp bleu exact_match \
 #   --predictions-csv it2_out/lora/inference_predictions.csv \
 #   --metrics-csv it2_out/lora/inference_metrics.csv \
-#   --max-length 256 --num-beams 5
+#   --max-length 256 --num-beams 5 --batch-size 8
 
 
 # Manual calling inefereces individually
@@ -243,7 +243,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv it2_out/lora/inference_predictions.csv \
   --metrics-csv it2_out/lora/inference_metrics.csv \
-  --max-length 256 --num-beams 5
+  --max-length 256 --num-beams 5 --batch-size 8
 QLoRA
 
 
@@ -255,7 +255,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv it2_out/qlora/inference_predictions.csv \
   --metrics-csv it2_out/qlora/inference_metrics.csv \
-  --max-length 256 --num-beams 5
+  --max-length 256 --num-beams 5 --batch-size 8
 Continued LoRA
 
 
@@ -267,7 +267,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv it2_out/lora_continue/inference_predictions.csv \
   --metrics-csv it2_out/lora_continue/inference_metrics.csv \
-  --max-length 256 --num-beams 5
+  --max-length 256 --num-beams 5 --batch-size 8
 full_lora
 
 
@@ -278,7 +278,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv it2_out/full_lora/inference_predictions.csv \
   --metrics-csv it2_out/full_lora/inference_metrics.csv \
-  --max-length 256 --num-beams 5
+  --max-length 256 --num-beams 5 --batch-size 8
 full
 
 
@@ -289,4 +289,4 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv it2_out/full/inference_predictions.csv \
   --metrics-csv it2_out/full/inference_metrics.csv \
-  --max-length 256 --num-beams 5
+  --max-length 256 --num-beams 5 --batch-size 8

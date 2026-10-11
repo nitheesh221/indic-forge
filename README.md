@@ -158,7 +158,8 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --predictions-csv it2_out/lora/inference_predictions.csv \
   --metrics-csv it2_out/lora/inference_metrics.csv \
   --max-length 256 \
-  --num-beams 5
+  --num-beams 5 \
+  --batch-size 8
 ```
 
 That writes one row per sentence to `inference_predictions.csv` (`src`, `reference`, `prediction`) and one corpus row to `inference_metrics.csv`. A metric that cannot run, such as COMET when `pkg_resources` is missing, is recorded in `metric_errors`. The other scores are still written.

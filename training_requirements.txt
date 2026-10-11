@@ -381,9 +381,13 @@ pytest>=8.0.0
 #
 # --max-length   default: 256
 # --num-beams    default: 5
+# --batch-size   default: 8
+#   sentences per model.generate call for translate and eval
+#   order matches the input, so prediction rows stay aligned with references
+#   training validation still uses --eval_batch_size (default 2), which is separate
 #
-# A JSON file is translated as one generate() batch. There is no inference
-# --batch-size flag. Training evaluation still chunks with --eval_batch_size.
+# JSON and text-file inference are generated in batches of --batch-size.
+# A file shorter than the batch size is one generate call.
 #
 # COMET scoring loads Unbabel/wmt22-comet-da and runs on CPU (gpus=0).
 # "Encoder model frozen" and "GPU available: True, used: False" come from that
@@ -400,7 +404,7 @@ pytest>=8.0.0
 #   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
 #   --predictions-csv it2_out/lora/inference_predictions.csv \
 #   --metrics-csv it2_out/lora/inference_metrics.csv \
-#   --max-length 256 --num-beams 5
+#   --max-length 256 --num-beams 5 --batch-size 8
 #
 # Same command for qlora and lora_continue, changing --adapter and the CSV paths.
 # full_lora and full drop --adapter and set --model to it2_out/<mode>/final_model.

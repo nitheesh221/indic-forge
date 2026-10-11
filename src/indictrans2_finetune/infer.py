@@ -163,37 +163,42 @@ def translate_batch(
     adapter: str | None = None,
     max_length: int = 256,
     num_beams: int = 5,
+    batch_size: int = 8,
 ) -> list[str]:
     src_lang = normalize_lang(src_lang)
     tgt_lang = normalize_lang(tgt_lang)
     model_name = model_name or default_model(src_lang, tgt_lang)
+    if batch_size < 1:
+        raise SystemExit("--batch-size must be at least 1")
     tokenizer, model, processor = load_pipeline(model_name, adapter)
     device = next(model.parameters()).device
     cleaned = [sentence.strip() for sentence in sentences if sentence.strip()]
-    if not cleaned:
-        return []
-    batch = processor.preprocess_batch(cleaned, src_lang=src_lang, tgt_lang=tgt_lang)
-    inputs = tokenizer(
-        batch,
-        truncation=True,
-        padding="longest",
-        max_length=max_length,
-        return_tensors="pt",
-        return_attention_mask=True,
-    ).to(device)
-    with torch.inference_mode():
-        generated = model.generate(
-            **inputs,
-            use_cache=False,
-            min_length=0,
+    hypotheses: list[str] = []
+    for start in range(0, len(cleaned), batch_size):
+        chunk = cleaned[start : start + batch_size]
+        batch = processor.preprocess_batch(chunk, src_lang=src_lang, tgt_lang=tgt_lang)
+        inputs = tokenizer(
+            batch,
+            truncation=True,
+            padding="longest",
             max_length=max_length,
-            num_beams=num_beams,
-            num_return_sequences=1,
+            return_tensors="pt",
+            return_attention_mask=True,
+        ).to(device)
+        with torch.inference_mode():
+            generated = model.generate(
+                **inputs,
+                use_cache=False,
+                min_length=0,
+                max_length=max_length,
+                num_beams=num_beams,
+                num_return_sequences=1,
+            )
+        decoded = tokenizer.batch_decode(
+            generated, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-    decoded = tokenizer.batch_decode(
-        generated, skip_special_tokens=True, clean_up_tokenization_spaces=True
-    )
-    return processor.postprocess_batch(decoded, lang=tgt_lang)
+        hypotheses.extend(processor.postprocess_batch(decoded, lang=tgt_lang))
+    return hypotheses
 
 
 def maybe_adapter_base(adapter: Path | None) -> str | None:

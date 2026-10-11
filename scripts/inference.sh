@@ -9,7 +9,7 @@
 # Example single text:
 #   PYTHONPATH=src python -m indictrans2_finetune.cli translate \
 #     --text "..." --src-lang asm_Beng --tgt-lang eng_Latn \
-#     --model "$BASE_MODEL" --max-length 256 --num-beams 5
+#     --model "$BASE_MODEL" --max-length 256 --num-beams 5 --batch-size 8
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,6 +20,7 @@ BASE_MODEL="${BASE_MODEL:-ai4bharat/indictrans2-indic-en-dist-200M}"
 EVAL_METRICS="${EVAL_METRICS:-chrf2pp comet bleu bertscore meteor ter exact_match}"
 MAX_LENGTH="${MAX_LENGTH:-256}"       # CLI default: 256
 NUM_BEAMS="${NUM_BEAMS:-5}"           # CLI default: 5
+BATCH_SIZE="${BATCH_SIZE:-8}"         # CLI default: 8 sentences per generate call
 OUTPUT_ROOT="${OUTPUT_ROOT:-it2_out}"
 # Space-separated subset of: lora qlora lora_continue full_lora full
 MODES="${MODES:-lora qlora lora_continue full_lora full}"
@@ -40,6 +41,7 @@ run_inference() {
     --metrics-csv "$output_dir/inference_metrics.csv"
     --max-length "$MAX_LENGTH"
     --num-beams "$NUM_BEAMS"
+    --batch-size "$BATCH_SIZE"
   )
   [[ -n "$adapter" ]] && args+=(--adapter "$adapter")
   PYTHONPATH=src python -m indictrans2_finetune.cli "${args[@]}"

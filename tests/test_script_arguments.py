@@ -38,6 +38,7 @@ def test_every_translate_argument_is_documented_in_inference_script():
         "--metrics-csv",
         "--max-length",
         "--num-beams",
+        "--batch-size",
     }
     text = (ROOT / "scripts/inference.sh").read_text(encoding="utf-8")
     missing = sorted(option for option in expected if option not in text)

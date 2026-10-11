@@ -20,6 +20,7 @@ def evaluate_split(
     model_name: str | None = None,
     adapter: str | None = None,
     max_examples: int | None = None,
+    batch_size: int = 8,
 ) -> dict:
     src_lang = normalize_lang(src_lang)
     tgt_lang = normalize_lang(tgt_lang)
@@ -34,7 +35,12 @@ def evaluate_split(
     model_name = model_name or maybe_adapter_base(Path(adapter) if adapter else None)
     model_name = model_name or default_model(src_lang, tgt_lang)
     predictions = translate_batch(
-        sources, src_lang, tgt_lang, model_name=model_name, adapter=adapter
+        sources,
+        src_lang,
+        tgt_lang,
+        model_name=model_name,
+        adapter=adapter,
+        batch_size=batch_size,
     )
     scores, errors = score_translations(sources, predictions, references, list(METRIC_ORDER))
     samples = [
@@ -78,6 +84,7 @@ def evaluate_json(
     metrics_csv: Path | None = None,
     max_length: int = 256,
     num_beams: int = 5,
+    batch_size: int = 8,
 ) -> dict:
     """Translate a train/val JSON file and score tgt_text as the reference."""
     selected = resolve_metrics(metrics)
@@ -108,6 +115,7 @@ def evaluate_json(
             adapter=adapter,
             max_length=max_length,
             num_beams=num_beams,
+            batch_size=batch_size,
         )
         scores, errors = score_translations(sources, hypotheses, references, selected)
         for source, reference, hypothesis in zip(sources, references, hypotheses):

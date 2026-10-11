@@ -85,6 +85,7 @@ def translate_cmd(
     ),
     max_length: int = typer.Option(256, "--max-length"),
     num_beams: int = typer.Option(5, "--num-beams"),
+    batch_size: int = typer.Option(8, "--batch-size", help="Sentences per generate call."),
 ) -> None:
     """Translate one sentence, a text file, or a train/val JSON file."""
     from indictrans2_finetune.evaluate import evaluate_json
@@ -104,6 +105,7 @@ def translate_cmd(
             metrics_csv=metrics_csv,
             max_length=max_length,
             num_beams=num_beams,
+            batch_size=batch_size,
         )
         typer.echo(
             f"scored {result['n']} rows, skipped {result['skipped']}\n"
@@ -137,6 +139,7 @@ def translate_cmd(
             adapter=str(adapter) if adapter else None,
             max_length=max_length,
             num_beams=num_beams,
+            batch_size=batch_size,
         ),
     ):
         typer.echo(f"{src}: {src_sent}")
@@ -174,6 +177,7 @@ def eval_cmd(
     model: Optional[str] = typer.Option(None),
     adapter: Optional[Path] = typer.Option(None),
     max_examples: Optional[int] = typer.Option(None),
+    batch_size: int = typer.Option(8, "--batch-size"),
 ) -> None:
     """Compute BLEU and chrF on a prepared split."""
     from indictrans2_finetune.evaluate import evaluate_split
@@ -186,6 +190,7 @@ def eval_cmd(
         model_name=model,
         adapter=str(adapter) if adapter else None,
         max_examples=max_examples,
+        batch_size=batch_size,
     )
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
 

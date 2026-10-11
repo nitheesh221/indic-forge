@@ -27,6 +27,56 @@ def test_eval_metrics_accept_spaces_and_commas():
     assert resolve_metrics(["chrf2pp", "bleu"]) == ["chrf2pp", "bleu"]
 
 
+def test_translate_batch_splits_sentences_and_keeps_order(monkeypatch):
+    import torch
+
+    from indictrans2_finetune.infer import translate_batch
+
+    seen: list[list[str]] = []
+
+    class Tokenizer:
+        def __call__(self, batch, **_kwargs):
+            rows = list(batch)
+            seen.append(rows)
+
+            class Batch:
+                def to(self, _device):
+                    return {"input_ids": torch.zeros(len(rows), 1, dtype=torch.long)}
+
+            return Batch()
+
+        def batch_decode(self, generated, **_kwargs):
+            return [f"hyp-{index}" for index in range(generated.shape[0])]
+
+    class Model:
+        def parameters(self):
+            yield torch.zeros(1)
+
+        def generate(self, **kwargs):
+            return kwargs["input_ids"]
+
+    class Processor:
+        def preprocess_batch(self, chunk, **_kwargs):
+            return list(chunk)
+
+        def postprocess_batch(self, decoded, **_kwargs):
+            return [f"{item}-out" for item in decoded]
+
+    monkeypatch.setattr(
+        "indictrans2_finetune.infer.load_pipeline",
+        lambda *_args, **_kwargs: (Tokenizer(), Model(), Processor()),
+    )
+    hypotheses = translate_batch(
+        ["a", "b", "c", "d", "e"],
+        "asm_Beng",
+        "eng_Latn",
+        model_name="base",
+        batch_size=2,
+    )
+    assert seen == [["a", "b"], ["c", "d"], ["e"]]
+    assert hypotheses == ["hyp-0-out", "hyp-1-out", "hyp-0-out", "hyp-1-out", "hyp-0-out"]
+
+
 def test_unknown_metric_is_rejected():
     with pytest.raises(SystemExit, match="Unknown metric"):
         resolve_metrics(["bleu", "wer"])
