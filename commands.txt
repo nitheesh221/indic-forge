@@ -208,3 +208,23 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
 
 # All five printed:
 #   Newcomer Rhea Chakraborty has been roped in to play a pivotal role.
+
+
+# =============================================================================
+# 10. JSON inference with metrics
+#     Same row format as train.json / valid.json. tgt_text is the reference.
+#     Full commands for every mode: scripts/inference.sh
+# =============================================================================
+
+# bash scripts/inference.sh
+#
+# One mode, one or more metrics:
+# PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+#   --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+#   --src-lang asm_Beng --tgt-lang eng_Latn \
+#   --model ai4bharat/indictrans2-indic-en-dist-200M \
+#   --adapter it2_out/lora/final_model \
+#   --eval-metrics chrf2pp bleu exact_match \
+#   --predictions-csv it2_out/lora/inference_predictions.csv \
+#   --metrics-csv it2_out/lora/inference_metrics.csv \
+#   --max-length 256 --num-beams 5

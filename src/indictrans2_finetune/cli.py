@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -57,17 +58,70 @@ def train_cmd(ctx: typer.Context) -> None:
 def translate_cmd(
     text: Optional[str] = typer.Option(None, help="Single sentence"),
     file: Optional[Path] = typer.Option(None, exists=True, help="One sentence per line"),
-    src_lang: str = typer.Option(...),
-    tgt_lang: str = typer.Option(...),
+    json_file: Optional[Path] = typer.Option(
+        None,
+        "--json-file",
+        exists=True,
+        help="Train/val JSON. tgt_text is the reference.",
+    ),
+    src_lang: Optional[str] = typer.Option(None),
+    tgt_lang: Optional[str] = typer.Option(None),
     model: Optional[str] = typer.Option(None),
     adapter: Optional[Path] = typer.Option(None, help="Directory with saved LoRA weights"),
+    eval_metrics: Optional[list[str]] = typer.Option(
+        None,
+        "--eval-metrics",
+        help="One or more of chrf2pp, comet, bleu, bertscore, meteor, ter, exact_match.",
+    ),
+    predictions_csv: Optional[Path] = typer.Option(
+        None,
+        "--predictions-csv",
+        help="Per-sentence src, reference, and prediction.",
+    ),
+    metrics_csv: Optional[Path] = typer.Option(
+        None,
+        "--metrics-csv",
+        help="Corpus scores for the selected metrics.",
+    ),
+    max_length: int = typer.Option(256, "--max-length"),
+    num_beams: int = typer.Option(5, "--num-beams"),
 ) -> None:
-    """Translate with the base model or a fine-tuned adapter."""
+    """Translate one sentence, a text file, or a train/val JSON file."""
+    from indictrans2_finetune.evaluate import evaluate_json
     from indictrans2_finetune.infer import maybe_adapter_base, translate_batch
 
+    if json_file and (text or file):
+        raise typer.BadParameter("Pass --json-file or --text/--file, not both.")
+    if json_file:
+        result = evaluate_json(
+            json_file,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            model_name=model,
+            adapter=str(adapter) if adapter else None,
+            metrics=eval_metrics,
+            predictions_csv=predictions_csv,
+            metrics_csv=metrics_csv,
+            max_length=max_length,
+            num_beams=num_beams,
+        )
+        typer.echo(
+            f"scored {result['n']} rows, skipped {result['skipped']}\n"
+            f"predictions: {result['predictions_csv']}\n"
+            f"metrics: {result['metrics_csv']}"
+        )
+        for row in result["metrics"]:
+            typer.echo(json.dumps(row, ensure_ascii=False))
+        return
+
+    if not text and not file:
+        raise typer.BadParameter("Provide --text, --file, or --json-file")
+    if not src_lang or not tgt_lang:
+        raise typer.BadParameter("--src-lang and --tgt-lang are required with --text or --file")
     sentences = [text] if text else []
     if file:
         sentences.extend(file.read_text(encoding="utf-8").splitlines())
+    sentences = [sentence for sentence in sentences if sentence and sentence.strip()]
     if not sentences:
         raise typer.BadParameter("Provide --text or --file")
     src = normalize_lang(src_lang)
@@ -75,11 +129,40 @@ def translate_cmd(
     model_name = model or maybe_adapter_base(adapter) or default_model(src, tgt)
     for src_sent, hyp in zip(
         sentences,
-        translate_batch(sentences, src, tgt, model_name=model_name, adapter=str(adapter) if adapter else None),
+        translate_batch(
+            sentences,
+            src,
+            tgt,
+            model_name=model_name,
+            adapter=str(adapter) if adapter else None,
+            max_length=max_length,
+            num_beams=num_beams,
+        ),
     ):
         typer.echo(f"{src}: {src_sent}")
         typer.echo(f"{tgt}: {hyp}")
         typer.echo("")
+
+
+def collapse_eval_metrics(argv: list[str]) -> list[str]:
+    """Accept `--eval-metrics chrf2pp bleu ter` as well as repeated flags."""
+    collapsed: list[str] = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token != "--eval-metrics" and not token.startswith("--eval-metrics="):
+            collapsed.append(token)
+            index += 1
+            continue
+        raw = token.split("=", 1)[1] if token.startswith("--eval-metrics=") else ""
+        index += 1
+        pieces = raw.replace(",", " ").split()
+        while index < len(argv) and not argv[index].startswith("--"):
+            pieces.extend(argv[index].replace(",", " ").split())
+            index += 1
+        for piece in pieces:
+            collapsed.extend(["--eval-metrics", piece])
+    return collapsed
 
 
 @app.command("eval")
@@ -118,5 +201,10 @@ def ui_cmd(
     launch(host=host, port=port)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    sys.argv = [sys.argv[0], *collapse_eval_metrics(sys.argv[1:])]
     app()
+
+
+if __name__ == "__main__":
+    main()
