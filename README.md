@@ -107,7 +107,17 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py \
   --bf16 --eval_strategy epoch --save_strategy epoch
 ```
 
-Ready-made wrappers: `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, `scripts/train_full.sh`.
+Ready-made wrappers: `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, `scripts/train_full.sh`. Each wrapper lists every `train.py` argument, including parser defaults, mode-specific values, optional boolean flags, and mutually exclusive data inputs. Values are environment-overridable for Docker/Kubeflow:
+
+```bash
+TRAIN_JSON=/data/train.json \
+VAL_JSON=/data/valid.json \
+SRC_LANG=asm_Beng \
+TGT_LANG=eng_Latn \
+MODEL_HF_ID=ai4bharat/indictrans2-indic-en-dist-200M \
+GPU_IDS=0 \
+bash scripts/train_lora.sh
+```
 
 If you omit `--learning_rate`, LoRA and QLoRA use `2e-4`; full and full_lora use `2e-5`. QLoRA defaults to `--optim paged_adamw_32bit`, NF4, and bfloat16 compute. Checkpoints are ranked only by `eval_loss`, `eval_entropy`, or `eval_mean_token_accuracy`.
 

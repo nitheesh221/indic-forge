@@ -1,74 +1,71 @@
 #!/usr/bin/env bash
-# Score valid.json with every saved IndicTrans2 mode.
-# JSON rows use the same fields as training: src_lang, tgt_lang, src_text, tgt_text.
-# tgt_text is the reference. One metric failure is recorded; the others are still written.
+# JSON inference + metrics for every saved mode. Every `translate` argument is
+# represented here and values can be overridden for Docker/Kubeflow.
+#
+# Input arguments are mutually exclusive:
+#   --json-file: active below; expects src_lang, tgt_lang, src_text, tgt_text
+#   --text:      one sentence; prints translation and does not calculate metrics
+#   --file:      one source sentence per line; no references or metrics
+# Example single text:
+#   PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+#     --text "..." --src-lang asm_Beng --tgt-lang eng_Latn \
+#     --model "$BASE_MODEL" --max-length 256 --num-beams 5
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-JSON_FILE="/shared/nithish/INDICTRANS2_train_custom/data/valid.json"
-SRC_LANG="asm_Beng"
-TGT_LANG="eng_Latn"
-BASE_MODEL="ai4bharat/indictrans2-indic-en-dist-200M"
+JSON_FILE="${JSON_FILE:-/shared/nithish/INDICTRANS2_train_custom/data/valid.json}"
+SRC_LANG="${SRC_LANG:-asm_Beng}"
+TGT_LANG="${TGT_LANG:-eng_Latn}"
+BASE_MODEL="${BASE_MODEL:-ai4bharat/indictrans2-indic-en-dist-200M}"
+EVAL_METRICS="${EVAL_METRICS:-chrf2pp comet bleu bertscore meteor ter exact_match}"
+MAX_LENGTH="${MAX_LENGTH:-256}"       # CLI default: 256
+NUM_BEAMS="${NUM_BEAMS:-5}"           # CLI default: 5
+OUTPUT_ROOT="${OUTPUT_ROOT:-it2_out}"
+# Space-separated subset of: lora qlora lora_continue full_lora full
+MODES="${MODES:-lora qlora lora_continue full_lora full}"
 
-# LoRA adapter
-PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file "$JSON_FILE" \
-  --src-lang "$SRC_LANG" \
-  --tgt-lang "$TGT_LANG" \
-  --model "$BASE_MODEL" \
-  --adapter it2_out/lora/final_model \
-  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
-  --predictions-csv it2_out/lora/inference_predictions.csv \
-  --metrics-csv it2_out/lora/inference_metrics.csv \
-  --max-length 256 \
-  --num-beams 5
+run_inference() {
+  local mode="$1"
+  local model="$2"
+  local adapter="$3"                  # empty for merged full/full_lora models
+  local output_dir="$OUTPUT_ROOT/$mode"
+  local args=(
+    translate
+    --json-file "$JSON_FILE"
+    --src-lang "$SRC_LANG"
+    --tgt-lang "$TGT_LANG"
+    --model "$model"
+    --eval-metrics $EVAL_METRICS
+    --predictions-csv "$output_dir/inference_predictions.csv"
+    --metrics-csv "$output_dir/inference_metrics.csv"
+    --max-length "$MAX_LENGTH"
+    --num-beams "$NUM_BEAMS"
+  )
+  [[ -n "$adapter" ]] && args+=(--adapter "$adapter")
+  PYTHONPATH=src python -m indictrans2_finetune.cli "${args[@]}"
+}
 
-# QLoRA adapter, loaded on the normal base model
-PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file "$JSON_FILE" \
-  --src-lang "$SRC_LANG" \
-  --tgt-lang "$TGT_LANG" \
-  --model "$BASE_MODEL" \
-  --adapter it2_out/qlora/final_model \
-  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
-  --predictions-csv it2_out/qlora/inference_predictions.csv \
-  --metrics-csv it2_out/qlora/inference_metrics.csv \
-  --max-length 256 \
-  --num-beams 5
-
-# Continued LoRA adapter
-PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file "$JSON_FILE" \
-  --src-lang "$SRC_LANG" \
-  --tgt-lang "$TGT_LANG" \
-  --model "$BASE_MODEL" \
-  --adapter it2_out/lora_continue/final_model \
-  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
-  --predictions-csv it2_out/lora_continue/inference_predictions.csv \
-  --metrics-csv it2_out/lora_continue/inference_metrics.csv \
-  --max-length 256 \
-  --num-beams 5
-
-# full_lora merged model
-PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file "$JSON_FILE" \
-  --src-lang "$SRC_LANG" \
-  --tgt-lang "$TGT_LANG" \
-  --model it2_out/full_lora/final_model \
-  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
-  --predictions-csv it2_out/full_lora/inference_predictions.csv \
-  --metrics-csv it2_out/full_lora/inference_metrics.csv \
-  --max-length 256 \
-  --num-beams 5
-
-# full model
-PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file "$JSON_FILE" \
-  --src-lang "$SRC_LANG" \
-  --tgt-lang "$TGT_LANG" \
-  --model it2_out/full/final_model \
-  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
-  --predictions-csv it2_out/full/inference_predictions.csv \
-  --metrics-csv it2_out/full/inference_metrics.csv \
-  --max-length 256 \
-  --num-beams 5
+for mode in $MODES; do
+  case "$mode" in
+    lora)
+      run_inference lora "$BASE_MODEL" "$OUTPUT_ROOT/lora/final_model"
+      ;;
+    qlora)
+      # QLoRA adapters load on the normal base model during inference.
+      run_inference qlora "$BASE_MODEL" "$OUTPUT_ROOT/qlora/final_model"
+      ;;
+    lora_continue)
+      run_inference lora_continue "$BASE_MODEL" "$OUTPUT_ROOT/lora_continue/final_model"
+      ;;
+    full_lora)
+      run_inference full_lora "$OUTPUT_ROOT/full_lora/final_model" ""
+      ;;
+    full)
+      run_inference full "$OUTPUT_ROOT/full/final_model" ""
+      ;;
+    *)
+      echo "Unknown mode '$mode'. Choose: lora qlora lora_continue full_lora full" >&2
+      exit 2
+      ;;
+  esac
+done

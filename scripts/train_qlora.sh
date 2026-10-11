@@ -1,31 +1,80 @@
 #!/usr/bin/env bash
-# 4-bit QLoRA. BitsAndBytes and a CUDA GPU are required.
+# QLoRA: every train.py argument is represented below. Requires BitsAndBytes + CUDA.
+# Override values as environment variables, for example:
+# TRAIN_JSON=/data/train.json VAL_JSON=/data/val.json GPU_IDS=0 bash scripts/train_qlora.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-python train.py \
-  --gpu_ids "${GPU_IDS:-0}" \
-  --model_hf_id ai4bharat/indictrans2-en-indic-dist-200M \
-  --train_mode qlora \
-  --train_json data/sample/train.jsonl \
-  --val_json data/sample/dev.jsonl \
-  --src_lang eng_Latn \
-  --tgt_lang hin_Deva \
-  --output_dir it2_out/qlora \
-  --final_model_dir it2_out/qlora/final_model \
-  --epochs 2 \
-  --batch_size 2 \
-  --gradient_accumulation_steps 4 \
-  --learning_rate 2e-4 \
-  --lora_r 8 \
-  --lora_alpha 16 \
-  --lora_dropout 0.05 \
-  --optim paged_adamw_32bit \
-  --bnb_compute_dtype bfloat16 \
-  --bnb_4bit_quant_type nf4 \
-  --bnb_4bit_use_double_quant \
-  --bf16 \
-  --gradient_checkpointing \
-  --eval_strategy epoch \
-  --save_strategy epoch \
-  --metric_for_best_model eval_loss \
-  --top_n_checkpoints 3
+
+MODEL_HF_ID="${MODEL_HF_ID:-ai4bharat/indictrans2-en-indic-dist-200M}"
+MODEL_ID="${MODEL_ID:-$MODEL_HF_ID}"             # default: MODEL_HF_ID
+ADAPTER_PATH="${ADAPTER_PATH:-}"                 # default: empty; set to continue an adapter
+TRAIN_JSON="${TRAIN_JSON:-data/sample/train.jsonl}"
+VAL_JSON="${VAL_JSON:-data/sample/dev.jsonl}"
+DATA_DIR="${DATA_DIR:-}"                         # alternative to TRAIN_JSON + VAL_JSON
+SRC_LANG="${SRC_LANG:-eng_Latn}"
+TGT_LANG="${TGT_LANG:-hin_Deva}"
+OUTPUT_DIR="${OUTPUT_DIR:-it2_out/qlora}"
+FINAL_MODEL_DIR="${FINAL_MODEL_DIR:-$OUTPUT_DIR/final_model}"
+GPU_IDS="${GPU_IDS:-0}"
+RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
+
+ARGS=(
+  --train_mode qlora
+  --model_hf_id "$MODEL_HF_ID"
+  --model_id "$MODEL_ID"
+  --src_lang "$SRC_LANG"
+  --tgt_lang "$TGT_LANG"
+  --output_dir "$OUTPUT_DIR"
+  --final_model_dir "$FINAL_MODEL_DIR"
+  --epochs "${EPOCHS:-2}"
+  --batch_size "${BATCH_SIZE:-2}"
+  --eval_batch_size "${EVAL_BATCH_SIZE:-2}"
+  --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS:-4}"
+  --learning_rate "${LEARNING_RATE:-2e-4}"
+  --weight_decay "${WEIGHT_DECAY:-0.01}"
+  --warmup_ratio "${WARMUP_RATIO:-0.03}"
+  --lr_scheduler_type "${LR_SCHEDULER_TYPE:-cosine}"
+  --optim "${OPTIM:-paged_adamw_32bit}"
+  --max_grad_norm "${MAX_GRAD_NORM:-1.0}"
+  --logging_steps "${LOGGING_STEPS:-50}"
+  --seed "${SEED:-42}"
+  --max_length "${MAX_LENGTH:-256}"
+  --eval_strategy "${EVAL_STRATEGY:-epoch}"
+  --eval_steps "${EVAL_STEPS:-50}"
+  --eval_max_new_tokens "${EVAL_MAX_NEW_TOKENS:-256}"
+  --eval_accumulation_steps "${EVAL_ACCUMULATION_STEPS:-1}"
+  --generation_num_beams "${GENERATION_NUM_BEAMS:-5}"
+  --save_strategy "${SAVE_STRATEGY:-epoch}"
+  --save_steps "${SAVE_STEPS:-500}"
+  --save_total_limit "${SAVE_TOTAL_LIMIT:-3}"
+  --metric_for_best_model "${METRIC_FOR_BEST_MODEL:-eval_loss}"
+  --top_n_checkpoints "${TOP_N_CHECKPOINTS:-3}"
+  --eval_metrics ${EVAL_METRICS:-chrf2pp comet bleu bertscore meteor ter exact_match}
+  --eval_metrics_csv "${EVAL_METRICS_CSV:-eval_metrics.csv}"
+  --eval_samples_csv "${EVAL_SAMPLES_CSV:-eval_samples.csv}"
+  --training_logs_csv "${TRAINING_LOGS_CSV:-training_logs.csv}"
+  --lora_r "${LORA_R:-8}"
+  --lora_alpha "${LORA_ALPHA:-16}"
+  --lora_dropout "${LORA_DROPOUT:-0.05}"
+  --lora_target_modules "${LORA_TARGET_MODULES:-q_proj,k_proj}"
+  --bnb_compute_dtype "${BNB_COMPUTE_DTYPE:-bfloat16}"
+  --bnb_4bit_quant_type "${BNB_4BIT_QUANT_TYPE:-nf4}"
+  --gpu_ids "$GPU_IDS"
+  --num_workers "${NUM_WORKERS:-4}"
+  --report_to "${REPORT_TO:-none}"
+)
+
+if [[ -n "$DATA_DIR" ]]; then
+  ARGS+=(--data_dir "$DATA_DIR")
+else
+  ARGS+=(--train_json "$TRAIN_JSON" --val_json "$VAL_JSON")
+fi
+[[ -n "$ADAPTER_PATH" ]] && ARGS+=(--adapter_path "$ADAPTER_PATH")
+[[ -n "$RESUME_FROM_CHECKPOINT" ]] && ARGS+=(--resume_from_checkpoint "$RESUME_FROM_CHECKPOINT")
+[[ "${SAVE_ONLY_MODEL:-0}" == 1 ]] && ARGS+=(--save_only_model)
+[[ "${BNB_4BIT_USE_DOUBLE_QUANT:-1}" == 1 ]] && ARGS+=(--bnb_4bit_use_double_quant)
+[[ "${GRADIENT_CHECKPOINTING:-1}" == 1 ]] && ARGS+=(--gradient_checkpointing)
+[[ "${BF16:-1}" == 1 ]] && ARGS+=(--bf16)
+[[ "${FP16:-0}" == 1 ]] && ARGS+=(--fp16) # Do not enable together with BF16.
+
+python train.py "${ARGS[@]}"
