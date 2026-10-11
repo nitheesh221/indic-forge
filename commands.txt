@@ -228,3 +228,65 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
 #   --predictions-csv it2_out/lora/inference_predictions.csv \
 #   --metrics-csv it2_out/lora/inference_metrics.csv \
 #   --max-length 256 --num-beams 5
+
+
+# Manual calling inefereces individually
+
+LoRA
+
+
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/lora/final_model \
+  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
+  --predictions-csv it2_out/lora/inference_predictions.csv \
+  --metrics-csv it2_out/lora/inference_metrics.csv \
+  --max-length 256 --num-beams 5
+QLoRA
+
+
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/qlora/final_model \
+  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
+  --predictions-csv it2_out/qlora/inference_predictions.csv \
+  --metrics-csv it2_out/qlora/inference_metrics.csv \
+  --max-length 256 --num-beams 5
+Continued LoRA
+
+
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/lora_continue/final_model \
+  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
+  --predictions-csv it2_out/lora_continue/inference_predictions.csv \
+  --metrics-csv it2_out/lora_continue/inference_metrics.csv \
+  --max-length 256 --num-beams 5
+full_lora
+
+
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model it2_out/full_lora/final_model \
+  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
+  --predictions-csv it2_out/full_lora/inference_predictions.csv \
+  --metrics-csv it2_out/full_lora/inference_metrics.csv \
+  --max-length 256 --num-beams 5
+full
+
+
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src-lang asm_Beng --tgt-lang eng_Latn \
+  --model it2_out/full/final_model \
+  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
+  --predictions-csv it2_out/full/inference_predictions.csv \
+  --metrics-csv it2_out/full/inference_metrics.csv \
+  --max-length 256 --num-beams 5
