@@ -136,6 +136,30 @@ indictrans2-ft eval \
   --adapter it2_out/lora/final_model
 ```
 
+`--text` and `--file` only print the translation. To score a file with the same fields as `train.json` / `valid.json` (`src_lang`, `tgt_lang`, `src_text`, `tgt_text`), pass `--json-file`. `tgt_text` is the reference. Choose one or more metrics with `--eval-metrics`; omit it to calculate all seven.
+
+```bash
+PYTHONPATH=src python -m indictrans2_finetune.cli translate \
+  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --src-lang asm_Beng \
+  --tgt-lang eng_Latn \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
+  --adapter it2_out/lora/final_model \
+  --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
+  --predictions-csv it2_out/lora/inference_predictions.csv \
+  --metrics-csv it2_out/lora/inference_metrics.csv \
+  --max-length 256 \
+  --num-beams 5
+```
+
+That writes one row per sentence to `inference_predictions.csv` (`src`, `reference`, `prediction`) and one corpus row to `inference_metrics.csv`. A metric that cannot run, such as COMET when `pkg_resources` is missing, is recorded in `metric_errors`. The other scores are still written.
+
+`scripts/inference.sh` has the full command for every saved mode: LoRA, QLoRA, continued LoRA, merged `full_lora`, and `full`. Adapter modes pass `--adapter`. `full_lora` and `full` pass only `--model` pointing at `it2_out/<mode>/final_model`.
+
+```bash
+bash scripts/inference.sh
+```
+
 Training writes `eval_metrics.csv`, `eval_samples.csv`, and `training_logs.csv` under `--output_dir`. Reported translation metrics, in priority order:
 
 1. chrF++
