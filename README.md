@@ -17,10 +17,9 @@ GPU is strongly recommended for training. Distilled models can run inference on 
 
 ## Setup
 
-Python 3.10+ on Linux or macOS (`IndicTransToolkit` is not supported on Windows). Pin **transformers 4.x** (this repo does that for you); IndicTransToolkit currently imports tokenizer types that moved in transformers 5.
+Use the Python already in `.venv`. No separate Python version is required. `IndicTransToolkit` is not supported on Windows. This repo pins **transformers 4.x**; IndicTransToolkit currently imports tokenizer types that moved in transformers 5.
 
 ```bash
-python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
