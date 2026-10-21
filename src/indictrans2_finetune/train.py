@@ -14,36 +14,47 @@ def load_and_process_translation_dataset(
     split: str,
     tokenizer,
     processor,
-    src_lang_list: list[str],
-    tgt_lang_list: list[str],
+    pairs: list[tuple[str, str]],
     max_length: int = 256,
     num_proc: int = 1,
     seed: int = 42,
 ) -> tuple[Dataset, dict[str, list[str]]]:
-    src_lang_list = [normalize_lang(code) for code in src_lang_list]
-    tgt_lang_list = [normalize_lang(code) for code in tgt_lang_list]
-    validate_official_dir(data_dir, split, src_lang_list, tgt_lang_list)
+    if not pairs:
+        raise ValueError(f"No {split} language pairs to load.")
+    normalized = [(normalize_lang(src), normalize_lang(tgt)) for src, tgt in pairs]
 
-    complete = {"sentence_SRC": [], "sentence_TGT": [], "raw_src": [], "raw_tgt": []}
-    for src_lang in src_lang_list:
-        for tgt_lang in tgt_lang_list:
-            if src_lang == tgt_lang:
-                continue
-            src_path = data_dir / split / f"{src_lang}-{tgt_lang}" / f"{split}.{src_lang}"
-            tgt_path = data_dir / split / f"{src_lang}-{tgt_lang}" / f"{split}.{tgt_lang}"
-            src_lines = [line.strip() for line in src_path.read_text(encoding="utf-8").splitlines()]
-            tgt_lines = [line.strip() for line in tgt_path.read_text(encoding="utf-8").splitlines()]
-            complete["raw_src"] += src_lines
-            complete["raw_tgt"] += tgt_lines
-            complete["sentence_SRC"] += processor.preprocess_batch(
-                src_lines, src_lang=src_lang, tgt_lang=tgt_lang, is_target=False
-            )
-            complete["sentence_TGT"] += processor.preprocess_batch(
-                tgt_lines, src_lang=tgt_lang, tgt_lang=src_lang, is_target=True
-            )
+    complete = {
+        "sentence_SRC": [],
+        "sentence_TGT": [],
+        "raw_src": [],
+        "raw_tgt": [],
+        "src_lang": [],
+        "tgt_lang": [],
+    }
+    for src_lang, tgt_lang in normalized:
+        validate_official_dir(data_dir, split, [src_lang], [tgt_lang])
+        src_path = data_dir / split / f"{src_lang}-{tgt_lang}" / f"{split}.{src_lang}"
+        tgt_path = data_dir / split / f"{src_lang}-{tgt_lang}" / f"{split}.{tgt_lang}"
+        src_lines = [line.strip() for line in src_path.read_text(encoding="utf-8").splitlines()]
+        tgt_lines = [line.strip() for line in tgt_path.read_text(encoding="utf-8").splitlines()]
+        complete["raw_src"] += src_lines
+        complete["raw_tgt"] += tgt_lines
+        complete["src_lang"] += [src_lang] * len(src_lines)
+        complete["tgt_lang"] += [tgt_lang] * len(tgt_lines)
+        complete["sentence_SRC"] += processor.preprocess_batch(
+            src_lines, src_lang=src_lang, tgt_lang=tgt_lang, is_target=False
+        )
+        complete["sentence_TGT"] += processor.preprocess_batch(
+            tgt_lines, src_lang=tgt_lang, tgt_lang=src_lang, is_target=True
+        )
 
     dataset = Dataset.from_dict(complete).shuffle(seed=seed)
-    raw = {"src": list(dataset["raw_src"]), "tgt": list(dataset["raw_tgt"])}
+    raw = {
+        "src": list(dataset["raw_src"]),
+        "tgt": list(dataset["raw_tgt"]),
+        "src_lang": list(dataset["src_lang"]),
+        "tgt_lang": list(dataset["tgt_lang"]),
+    }
 
     def preprocess_fn(example):
         model_inputs = tokenizer(

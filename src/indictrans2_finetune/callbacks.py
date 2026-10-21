@@ -54,11 +54,21 @@ class TopNCheckpointCallback(TrainerCallback):
 
 
 class TranslationMetricsCallback(TrainerCallback):
-    def __init__(self, trainer_box: dict, sources: list[str], references: list[str], args):
+    def __init__(
+        self,
+        trainer_box: dict,
+        sources: list[str],
+        references: list[str],
+        args,
+        src_langs: list[str] | None = None,
+        tgt_langs: list[str] | None = None,
+    ):
         self.trainer_box = trainer_box
         self.sources = sources
         self.references = references
         self.user_args = args
+        self.src_langs = src_langs or [args.src_lang] * len(sources)
+        self.tgt_langs = tgt_langs or [args.tgt_lang] * len(sources)
         self.processor = get_processor(inference=True)
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
@@ -72,11 +82,13 @@ class TranslationMetricsCallback(TrainerCallback):
                 tokenizer,
                 self.processor,
                 self.sources,
-                self.user_args.src_lang,
-                self.user_args.tgt_lang,
+                self.src_langs[0],
+                self.tgt_langs[0],
                 self.user_args.eval_max_new_tokens,
                 self.user_args.generation_num_beams,
                 self.user_args.eval_batch_size,
+                src_langs=self.src_langs,
+                tgt_langs=self.tgt_langs,
             )
         except Exception as exc:  # noqa: BLE001 — translation scores must not abort training
             output = Path(self.user_args.output_dir)
@@ -101,8 +113,17 @@ class TranslationMetricsCallback(TrainerCallback):
             metric_row["metric_errors"] = " | ".join(f"{name}: {msg}" for name, msg in errors.items())
         _append_row(output / self.user_args.eval_metrics_csv, metric_row)
         sample_rows = [
-            {"step": state.global_step, "src": src, "ref": ref, "hyp": hyp}
-            for src, ref, hyp in zip(self.sources, self.references, hypotheses)
+            {
+                "step": state.global_step,
+                "src_lang": src_lang,
+                "tgt_lang": tgt_lang,
+                "src": src,
+                "ref": ref,
+                "hyp": hyp,
+            }
+            for src_lang, tgt_lang, src, ref, hyp in zip(
+                self.src_langs, self.tgt_langs, self.sources, self.references, hypotheses
+            )
         ]
         _append_rows(output / self.user_args.eval_samples_csv, sample_rows)
         if metrics is not None:
@@ -119,30 +140,51 @@ def generate_translations(
     max_length: int,
     num_beams: int,
     batch_size: int,
+    src_langs: list[str] | None = None,
+    tgt_langs: list[str] | None = None,
 ) -> list[str]:
+    if src_langs is None:
+        src_langs = [src_lang] * len(sentences)
+    if tgt_langs is None:
+        tgt_langs = [tgt_lang] * len(sentences)
+    if not (len(sentences) == len(src_langs) == len(tgt_langs)):
+        raise ValueError("sentences, src_langs, and tgt_langs must have the same length")
     device = next(model.parameters()).device
-    hypotheses: list[str] = []
+    hypotheses = [""] * len(sentences)
+    grouped: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for index, (sentence, pair_src, pair_tgt) in enumerate(zip(sentences, src_langs, tgt_langs)):
+        grouped.setdefault((pair_src, pair_tgt), []).append((index, sentence))
     model.eval()
-    for start in range(0, len(sentences), batch_size):
-        chunk = sentences[start : start + batch_size]
-        prepared = processor.preprocess_batch(chunk, src_lang=src_lang, tgt_lang=tgt_lang)
-        inputs = tokenizer(
-            prepared,
-            truncation=True,
-            padding="longest",
-            max_length=max_length,
-            return_tensors="pt",
-        ).to(device)
-        with torch.inference_mode():
-            generated = model.generate(
-                **inputs,
-                use_cache=False,
-                num_beams=num_beams,
-                max_length=max_length,
-                min_length=0,
+    for (pair_src, pair_tgt), items in grouped.items():
+        for start in range(0, len(items), batch_size):
+            chunk = items[start : start + batch_size]
+            prepared = processor.preprocess_batch(
+                [sentence for _index, sentence in chunk],
+                src_lang=pair_src,
+                tgt_lang=pair_tgt,
             )
-        decoded = tokenizer.batch_decode(generated, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-        hypotheses.extend(processor.postprocess_batch(decoded, lang=tgt_lang))
+            inputs = tokenizer(
+                prepared,
+                truncation=True,
+                padding="longest",
+                max_length=max_length,
+                return_tensors="pt",
+            ).to(device)
+            with torch.inference_mode():
+                generated = model.generate(
+                    **inputs,
+                    use_cache=False,
+                    num_beams=num_beams,
+                    max_length=max_length,
+                    min_length=0,
+                )
+            decoded = tokenizer.batch_decode(
+                generated, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )
+            for (index, _sentence), hypothesis in zip(
+                chunk, processor.postprocess_batch(decoded, lang=pair_tgt)
+            ):
+                hypotheses[index] = hypothesis
     return hypotheses
 
 

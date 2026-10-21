@@ -10,8 +10,9 @@ ADAPTER_PATH="${ADAPTER_PATH:-}"                 # optional: merge this adapter,
 TRAIN_JSON="${TRAIN_JSON:-data/sample/train.jsonl}"
 VAL_JSON="${VAL_JSON:-data/sample/dev.jsonl}"
 DATA_DIR="${DATA_DIR:-}"                         # alternative to TRAIN_JSON + VAL_JSON
-SRC_LANG="${SRC_LANG:-eng_Latn}"
-TGT_LANG="${TGT_LANG:-hin_Deva}"
+# Empty means every pair in the JSON whose direction matches MODEL_HF_ID.
+SRC_LANG="${SRC_LANG:-}"
+TGT_LANG="${TGT_LANG:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-it2_out/full}"
 FINAL_MODEL_DIR="${FINAL_MODEL_DIR:-$OUTPUT_DIR/final_model}"
 GPU_IDS="${GPU_IDS:-0}"
@@ -21,8 +22,6 @@ ARGS=(
   --train_mode full
   --model_hf_id "$MODEL_HF_ID"
   --model_id "$MODEL_ID"
-  --src_lang "$SRC_LANG"
-  --tgt_lang "$TGT_LANG"
   --output_dir "$OUTPUT_DIR"
   --final_model_dir "$FINAL_MODEL_DIR"
   --epochs "${EPOCHS:-2}"
@@ -69,6 +68,8 @@ if [[ -n "$DATA_DIR" ]]; then
 else
   ARGS+=(--train_json "$TRAIN_JSON" --val_json "$VAL_JSON")
 fi
+[[ -n "$SRC_LANG" ]] && ARGS+=(--src_lang "$SRC_LANG")
+[[ -n "$TGT_LANG" ]] && ARGS+=(--tgt_lang "$TGT_LANG")
 [[ -n "$ADAPTER_PATH" ]] && ARGS+=(--adapter_path "$ADAPTER_PATH")
 [[ -n "$RESUME_FROM_CHECKPOINT" ]] && ARGS+=(--resume_from_checkpoint "$RESUME_FROM_CHECKPOINT")
 [[ "${SAVE_ONLY_MODEL:-1}" == 1 ]] && ARGS+=(--save_only_model)

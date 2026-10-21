@@ -9,15 +9,27 @@ from pathlib import Path
 
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, Seq2SeqTrainer, Seq2SeqTrainingArguments
+from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments,
+)
 
-from indictrans2_finetune.callbacks import CsvLogCallback, TopNCheckpointCallback, TranslationMetricsCallback
+from indictrans2_finetune.callbacks import (
+    CsvLogCallback,
+    TopNCheckpointCallback,
+    TranslationMetricsCallback,
+)
 from indictrans2_finetune.config import maybe_relaunch, parse_args
+from indictrans2_finetune.data import list_pair_dirs, prepare_file, select_training_pairs
 from indictrans2_finetune.infer import sanitize_saved_tokenizer
-from indictrans2_finetune.data import prepare_file
-from indictrans2_finetune.langs import normalize_lang
 from indictrans2_finetune.toolkit import get_collator, get_processor
-from indictrans2_finetune.train import load_and_process_translation_dataset, preprocess_logits_for_metrics, token_stats
+from indictrans2_finetune.train import (
+    load_and_process_translation_dataset,
+    preprocess_logits_for_metrics,
+    token_stats,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,12 +49,13 @@ def run(args) -> Path:
     model = _load_model(args)
     _prepare_gradient_checkpointing(model, args)
     processor = get_processor(inference=False)
-    train_dataset, train_raw = load_and_process_translation_dataset(
-        data_dir, "train", tokenizer, processor, [args.src_lang], [args.tgt_lang],
+    train_pairs = [(src, tgt) for src, tgt, _count in args.train_pairs]
+    train_dataset, _train_raw = load_and_process_translation_dataset(
+        data_dir, "train", tokenizer, processor, train_pairs,
         max_length=args.max_length, seed=args.seed,
     )
     eval_dataset, eval_raw = load_and_process_translation_dataset(
-        data_dir, "dev", tokenizer, processor, [args.src_lang], [args.tgt_lang],
+        data_dir, "dev", tokenizer, processor, train_pairs,
         max_length=args.max_length, seed=args.seed,
     )
     collator = _FilteringCollator(
@@ -60,7 +73,14 @@ def run(args) -> Path:
     ]
     if args.eval_strategy != "no":
         callbacks.append(
-            TranslationMetricsCallback(trainer_box, eval_raw["src"], eval_raw["tgt"], args)
+            TranslationMetricsCallback(
+                trainer_box,
+                eval_raw["src"],
+                eval_raw["tgt"],
+                args,
+                src_langs=eval_raw["src_lang"],
+                tgt_langs=eval_raw["tgt_lang"],
+            )
         )
     trainer_kwargs = {
         "model": model,
@@ -88,8 +108,9 @@ def run(args) -> Path:
         "train_mode": args.train_mode,
         "model_hf_id": args.model_hf_id,
         "model_id": args.model_id,
-        "src_lang": args.src_lang,
-        "tgt_lang": args.tgt_lang,
+        "src_lang": args.trained_src_lang,
+        "tgt_lang": args.trained_tgt_lang,
+        "pairs": [f"{src}-{tgt}" for src, tgt, _count in args.train_pairs],
         "learning_rate": args.learning_rate,
         "lora_target_modules": args.lora_target_modules,
         "eval_metrics": args.eval_metrics,
@@ -121,19 +142,36 @@ def _prepare_data(args, output_dir: Path) -> Path:
         data_dir = Path(args.data_dir)
     else:
         data_dir = output_dir / "prepared"
-        prepare_file(Path(args.train_json), data_dir, "train", args.src_lang, args.tgt_lang)
-        prepare_file(Path(args.val_json), data_dir, "dev", args.src_lang, args.tgt_lang)
-    if not args.src_lang or not args.tgt_lang:
-        args.src_lang, args.tgt_lang = _langs_from_dir(data_dir)
+        train_report = prepare_file(Path(args.train_json), data_dir, "train", args.src_lang, args.tgt_lang)
+        dev_report = prepare_file(Path(args.val_json), data_dir, "dev", args.src_lang, args.tgt_lang)
+        if train_report.skipped or dev_report.skipped:
+            print(
+                " | > rows skipped while reading JSON: "
+                f"train={train_report.skipped} dev={dev_report.skipped}"
+            )
+    pairs, skipped = select_training_pairs(
+        data_dir, args.model_hf_id, args.src_lang, args.tgt_lang, split="train"
+    )
+    missing = [
+        f"{src}-{tgt}"
+        for src, tgt, _count in pairs
+        if (src, tgt) not in {(item[0], item[1]) for item in list_pair_dirs(data_dir, "dev")}
+    ]
+    if missing:
+        raise SystemExit(
+            "Validation is missing pairs that training selected: " + ", ".join(missing)
+        )
+    args.train_pairs = pairs
+    sources = {src for src, _tgt, _count in pairs}
+    targets = {tgt for _src, tgt, _count in pairs}
+    args.trained_src_lang = next(iter(sources)) if len(sources) == 1 else None
+    args.trained_tgt_lang = next(iter(targets)) if len(targets) == 1 else None
+    summary = ", ".join(f"{src}->{tgt} ({count})" for src, tgt, count in pairs)
+    print(f" | > training pairs: {summary}")
+    if skipped:
+        skipped_text = ", ".join(f"{item['pair']} ({item['n']}, {item['reason']})" for item in skipped)
+        print(f" | > skipped pairs: {skipped_text}")
     return data_dir
-
-
-def _langs_from_dir(data_dir: Path) -> tuple[str, str]:
-    pairs = sorted((data_dir / "train").glob("*"))
-    if len(pairs) != 1:
-        raise SystemExit("Pass --src_lang and --tgt_lang when the prepared data has multiple pairs.")
-    src, tgt = pairs[0].name.split("-", 1)
-    return normalize_lang(src), normalize_lang(tgt)
 
 
 def _load_model(args):

@@ -66,7 +66,13 @@ pytest>=8.0.0
 #   sample_train_data/valid.json
 #   11 rows, asm_Beng -> eng_Latn
 #
-# If src_lang/tgt_lang omitted, CLI --src_lang / --tgt_lang are required.
+# Each row keeps its own src_lang and tgt_lang. A file may mix the scheduled
+# Indic languages, for example ben_Beng and kan_Knda in the same JSON.
+# Omit --src_lang and --tgt_lang to train every pair whose direction matches
+# the checkpoint. An indic-en model keeps rows whose target is eng_Latn and
+# skips a row aimed the other way. Passing both flags still trains one pair.
+# A row with no language tags uses the flags; if those are also omitted, the
+# row is skipped.
 # Internally converted to official IT2 pair folders:
 #   {data_dir}/train/{src}-{tgt}/train.{src}
 #   {data_dir}/train/{src}-{tgt}/train.{tgt}
@@ -151,9 +157,16 @@ pytest>=8.0.0
 #   notes: Hub id or local weights path actually loaded
 
 # --src_lang / --tgt_lang
-#   required: yes unless present on every JSON row
+#   required: no
 #   type: str  (FLORES or alias)
-#   notes: used for IndicProcessor and folder names
+#   default: unset
+#   notes: optional filters. Unset trains every JSON pair that matches the
+#          checkpoint direction (en-indic, indic-en, or indic-indic).
+#          One shared target such as eng_Latn can have many source languages
+#          in the same run. Each sentence is preprocessed with its own tags.
+#          Validation metrics stay one combined score. Set both flags to
+#          train only that pair. An explicit pair whose direction does not
+#          match the checkpoint is rejected.
 
 # --output_dir
 #   required: no
@@ -311,7 +324,7 @@ pytest>=8.0.0
 # =============================================================================
 # checkpoint-*         under --output_dir, kept by Top-N SFT metric
 # eval_metrics.csv     Trainer eval_* plus mean MT scores
-# eval_samples.csv     src / ref / hyp
+# eval_samples.csv     src_lang / tgt_lang / src / ref / hyp
 # training_logs.csv    Trainer log rows
 # --final_model_dir    full weights (full, full_lora) or adapter (lora, qlora)
 # finetune_meta.json   written next to the final model; records model_hf_id,

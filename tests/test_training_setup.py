@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from indictrans2_finetune.callbacks import TopNCheckpointCallback, retention_count
+from indictrans2_finetune.callbacks import (
+    TopNCheckpointCallback,
+    generate_translations,
+    retention_count,
+)
 from indictrans2_finetune.config import maybe_relaunch, parse_args
 from indictrans2_finetune.infer import (
     overlay_checkpoint,
@@ -54,6 +58,21 @@ def test_mode_defaults():
     assert qlora.keep_checkpoints == 1
 
 
+def test_language_flags_are_optional():
+    args = parse_args(
+        [
+            "--model_hf_id",
+            "ai4bharat/indictrans2-indic-en-dist-200M",
+            "--train_json",
+            "train.json",
+            "--val_json",
+            "valid.json",
+        ]
+    )
+    assert args.src_lang is None
+    assert args.tgt_lang is None
+
+
 def test_direction_must_match_checkpoint():
     with pytest.raises(SystemExit):
         parse_args(
@@ -76,6 +95,58 @@ def test_torchrun_rejects_gpu_ids(monkeypatch):
     monkeypatch.setenv("RANK", "0")
     with pytest.raises(SystemExit, match="torchrun"):
         maybe_relaunch(["--gpu_ids", "0", "--model_hf_id", BASE])
+
+
+def test_generate_translations_keeps_order_across_languages():
+    class _Processor:
+        def preprocess_batch(self, sentences, src_lang, tgt_lang):
+            return [f"{src_lang}|{sentence}" for sentence in sentences]
+
+        def postprocess_batch(self, decoded, lang):
+            return [f"{lang}:{text}" for text in decoded]
+
+    class _Parameter:
+        device = "cpu"
+
+    class _Batch(dict):
+        def to(self, _device):
+            return self
+
+    class _Tokenizer:
+        def __call__(self, batch, **_kwargs):
+            return _Batch(input_ids=list(batch))
+
+        def batch_decode(self, generated, **_kwargs):
+            return list(generated)
+
+    class _Model:
+        def parameters(self):
+            yield _Parameter()
+
+        def eval(self):
+            return None
+
+        def generate(self, **inputs):
+            return inputs["input_ids"]
+
+    hypotheses = generate_translations(
+        _Model(),
+        _Tokenizer(),
+        _Processor(),
+        ["kannada", "bengali", "kannada-2"],
+        "kan_Knda",
+        "eng_Latn",
+        max_length=32,
+        num_beams=1,
+        batch_size=8,
+        src_langs=["kan_Knda", "ben_Beng", "kan_Knda"],
+        tgt_langs=["eng_Latn", "eng_Latn", "eng_Latn"],
+    )
+    assert hypotheses == [
+        "eng_Latn:kan_Knda|kannada",
+        "eng_Latn:ben_Beng|bengali",
+        "eng_Latn:kan_Knda|kannada-2",
+    ]
 
 
 def test_exact_match_normalizes_whitespace_only():

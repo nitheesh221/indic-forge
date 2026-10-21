@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from indictrans2_finetune.data import prepare_file, rows_to_pairs, validate_official_dir
+from indictrans2_finetune.data import (
+    prepare_file,
+    rows_to_pairs,
+    select_training_pairs,
+    validate_official_dir,
+    write_official_layout,
+)
 from indictrans2_finetune.langs import default_model, direction_for, normalize_lang
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,6 +149,47 @@ def test_rows_to_pairs_flores_keys():
     assert skipped == 0
     assert pairs[0][2] == "Hello"
     assert pairs[0][3] == "नमस्ते"
+
+
+def _write_pair(root: Path, split: str, src: str, tgt: str, rows: int) -> None:
+    write_official_layout(
+        [(src, tgt, f"{src} {index}", f"{tgt} {index}") for index in range(rows)],
+        root,
+        split,
+    )
+
+
+def test_select_training_pairs_keeps_every_indic_to_english_source(tmp_path: Path):
+    _write_pair(tmp_path, "train", "ben_Beng", "eng_Latn", 2)
+    _write_pair(tmp_path, "train", "kan_Knda", "eng_Latn", 1)
+    _write_pair(tmp_path, "train", "eng_Latn", "hin_Deva", 3)
+    kept, skipped = select_training_pairs(
+        tmp_path, "ai4bharat/indictrans2-indic-en-dist-200M"
+    )
+    assert [(src, tgt, count) for src, tgt, count in kept] == [
+        ("ben_Beng", "eng_Latn", 2),
+        ("kan_Knda", "eng_Latn", 1),
+    ]
+    assert skipped == [{"pair": "eng_Latn-hin_Deva", "n": 3, "reason": "direction en-indic"}]
+
+
+def test_select_training_pairs_honors_an_explicit_pair(tmp_path: Path):
+    _write_pair(tmp_path, "train", "ben_Beng", "eng_Latn", 2)
+    _write_pair(tmp_path, "train", "kan_Knda", "eng_Latn", 1)
+    kept, skipped = select_training_pairs(
+        tmp_path,
+        "ai4bharat/indictrans2-indic-en-dist-200M",
+        src_lang="kan_Knda",
+        tgt_lang="eng_Latn",
+    )
+    assert [(src, tgt) for src, tgt, _count in kept] == [("kan_Knda", "eng_Latn")]
+    assert skipped[0]["reason"] == "source filter"
+
+
+def test_select_training_pairs_stops_when_nothing_matches(tmp_path: Path):
+    _write_pair(tmp_path, "train", "eng_Latn", "hin_Deva", 1)
+    with pytest.raises(SystemExit, match="indic-en"):
+        select_training_pairs(tmp_path, "ai4bharat/indictrans2-indic-en-dist-200M")
 
 
 def test_recipe_tab_languages_cover_sample():

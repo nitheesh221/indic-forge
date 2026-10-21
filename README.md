@@ -118,6 +118,8 @@ GPU_IDS=0 \
 bash scripts/train_lora.sh
 ```
 
+Leave `SRC_LANG` and `TGT_LANG` unset to train every pair in the JSON whose direction matches the checkpoint. With `indictrans2-indic-en-dist-200M`, Bengali, Kannada, and the other scheduled Indic languages can share one file and one run, and each row keeps its own `src_lang`. Rows whose target is `eng_Latn` are trained. A row aimed the other way is skipped and counted. The same command with `--src_lang asm_Beng --tgt_lang eng_Latn` still trains only Assamese. Validation chrF++, COMET, BLEU, BERTScore, METEOR, TER, and exact match stay one combined score.
+
 If you omit `--learning_rate`, LoRA and QLoRA use `2e-4`; full and full_lora use `2e-5`. QLoRA defaults to `--optim paged_adamw_32bit`, NF4, and bfloat16 compute. Checkpoints are ranked only by `eval_loss`, `eval_entropy`, or `eval_mean_token_accuracy`.
 
 | Direction | Distilled | Base |

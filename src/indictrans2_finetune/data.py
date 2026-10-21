@@ -261,6 +261,73 @@ def validate_official_dir(
     return counts
 
 
+def list_pair_dirs(data_dir: Path, split: str) -> list[tuple[str, str, int]]:
+    """Return (src, tgt, line count) for each prepared pair folder."""
+    root = data_dir / split
+    if not root.is_dir():
+        return []
+    found: list[tuple[str, str, int]] = []
+    for pair_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        if "-" not in pair_dir.name:
+            continue
+        src_name, tgt_name = pair_dir.name.split("-", 1)
+        try:
+            src_lang = normalize_lang(src_name)
+            tgt_lang = normalize_lang(tgt_name)
+        except ValueError:
+            continue
+        src_path = pair_dir / f"{split}.{src_lang}"
+        tgt_path = pair_dir / f"{split}.{tgt_lang}"
+        if not src_path.exists() or not tgt_path.exists():
+            continue
+        count = len(src_path.read_text(encoding="utf-8").splitlines())
+        if count:
+            found.append((src_lang, tgt_lang, count))
+    return found
+
+
+def select_training_pairs(
+    data_dir: Path,
+    model_hf_id: str,
+    src_lang: str | None = None,
+    tgt_lang: str | None = None,
+    split: str = "train",
+) -> tuple[list[tuple[str, str, int]], list[dict[str, str | int]]]:
+    """Keep pairs that match the checkpoint. Flags, when set, narrow that set."""
+    from indictrans2_finetune.langs import direction_for, direction_of_model
+
+    wanted_direction = direction_of_model(model_hf_id)
+    src_filter = normalize_lang(src_lang) if src_lang else None
+    tgt_filter = normalize_lang(tgt_lang) if tgt_lang else None
+    discovered = list_pair_dirs(data_dir, split)
+    kept: list[tuple[str, str, int]] = []
+    skipped: list[dict[str, str | int]] = []
+    for pair_src, pair_tgt, count in discovered:
+        pair_name = f"{pair_src}-{pair_tgt}"
+        if src_filter and pair_src != src_filter:
+            skipped.append({"pair": pair_name, "n": count, "reason": "source filter"})
+            continue
+        if tgt_filter and pair_tgt != tgt_filter:
+            skipped.append({"pair": pair_name, "n": count, "reason": "target filter"})
+            continue
+        direction = direction_for(pair_src, pair_tgt)
+        if direction != wanted_direction:
+            skipped.append({"pair": pair_name, "n": count, "reason": f"direction {direction}"})
+            continue
+        kept.append((pair_src, pair_tgt, count))
+    if not kept:
+        found = ", ".join(f"{src}-{tgt} ({count})" for src, tgt, count in discovered) or "none"
+        if src_filter or tgt_filter:
+            wanted = f"{src_filter or '*'} -> {tgt_filter or '*'}"
+            raise SystemExit(f"No {split} rows for {wanted} under {data_dir}. Found: {found}.")
+        skipped_text = ", ".join(f"{item['pair']} ({item['reason']})" for item in skipped) or "none"
+        raise SystemExit(
+            f"No {split} pairs match the {wanted_direction} checkpoint {model_hf_id}. "
+            f"Skipped: {skipped_text}. Found: {found}."
+        )
+    return kept, skipped
+
+
 def prepare_file(
     input_path: Path,
     output_dir: Path,

@@ -33,8 +33,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--adapter_path", default=None)
     parser.add_argument("--model_hf_id", required=True, choices=HF_MODEL_IDS)
     parser.add_argument("--model_id", default=None, help="Hub id or local weights. Defaults to --model_hf_id.")
-    parser.add_argument("--src_lang", default=None)
-    parser.add_argument("--tgt_lang", default=None)
+    parser.add_argument(
+        "--src_lang",
+        default=None,
+        help="Optional source filter. Omit to train every JSON pair that matches the checkpoint.",
+    )
+    parser.add_argument(
+        "--tgt_lang",
+        default=None,
+        help="Optional target filter. Omit to train every JSON pair that matches the checkpoint.",
+    )
     parser.add_argument("--output_dir", default="./it2_out/exp")
     parser.add_argument("--final_model_dir", default=None)
     parser.add_argument("--save_only_model", action="store_true")

@@ -101,6 +101,14 @@ def normalize_lang(code: str) -> str:
     )
 
 
+def direction_of_model(model_hf_id: str) -> str:
+    """Return en-indic, indic-en, or indic-indic from a checkpoint id."""
+    for name in ("indic-indic", "en-indic", "indic-en"):
+        if name in model_hf_id:
+            return name
+    raise ValueError(f"Cannot tell the translation direction from {model_hf_id}.")
+
+
 def direction_for(src: str, tgt: str) -> str:
     src = normalize_lang(src)
     tgt = normalize_lang(tgt)
