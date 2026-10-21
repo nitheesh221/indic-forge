@@ -279,7 +279,12 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
         kwargs["dataloader_prefetch_factor"] = 2
     if args.gradient_checkpointing and "gradient_checkpointing_kwargs" in signature.parameters:
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
-    return Seq2SeqTrainingArguments(**kwargs)
+    training = Seq2SeqTrainingArguments(**kwargs)
+    if getattr(args, "visible_gpu_count", None) == 1:
+        # Hugging Face wraps a 4-bit QLoRA model in DataParallel when it
+        # sees two GPUs. BitsAndBytes then fails with CUBLAS_STATUS_NOT_SUPPORTED.
+        training._n_gpu = 1
+    return training
 
 
 def _prepare_gradient_checkpointing(model, args) -> None:

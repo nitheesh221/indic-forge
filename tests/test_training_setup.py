@@ -10,7 +10,7 @@ from indictrans2_finetune.callbacks import (
     generate_translations,
     retention_count,
 )
-from indictrans2_finetune.config import maybe_relaunch, parse_args
+from indictrans2_finetune.config import maybe_relaunch, parse_args, pin_visible_gpus
 from indictrans2_finetune.infer import (
     overlay_checkpoint,
     sanitize_saved_tokenizer,
@@ -56,6 +56,21 @@ def test_mode_defaults():
     qlora = _args("qlora")
     assert qlora.optim == "paged_adamw_32bit"
     assert qlora.keep_checkpoints == 1
+
+
+def test_one_gpu_id_disables_data_parallel():
+    args = _args("qlora", gpu_ids=0)
+    assert args.visible_gpu_count == 1
+    from indictrans2_finetune.runner import _training_arguments
+
+    training = _training_arguments(args)
+    assert training._n_gpu == 1
+
+
+def test_pin_visible_gpus_sets_cuda_visible_devices(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    assert pin_visible_gpus(["--gpu_ids", "0", "--train_mode", "qlora"]) == ["0"]
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
 
 
 def test_language_flags_are_optional():

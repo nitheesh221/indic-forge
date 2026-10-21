@@ -302,6 +302,8 @@ pytest>=8.0.0
 # 14. PERFORMANCE
 # =============================================================================
 # --gpu_ids                  default: None
+#   sets CUDA_VISIBLE_DEVICES before torch is imported
+#   one id keeps the Trainer off DataParallel (required for QLoRA)
 # --num_workers              default: 4
 # --gradient_checkpointing   flag, default: false
 # --bf16 / --fp16            mutually exclusive flags

@@ -161,11 +161,43 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
         )
     args.keep_checkpoints = min(args.top_n_checkpoints, args.save_total_limit)
     args.greater_is_better = args.metric_for_best_model in HIGHER_IS_BETTER
+    if args.gpu_ids:
+        args.visible_gpu_count = len(
+            [item.strip() for item in args.gpu_ids.split(",") if item.strip()]
+        )
+    elif os.environ.get("RANK") is not None or os.environ.get("LOCAL_RANK") is not None:
+        args.visible_gpu_count = 1
+    else:
+        args.visible_gpu_count = None
     return args
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return resolve_args(build_parser().parse_args(argv))
+
+
+def pin_visible_gpus(argv: list[str] | None = None) -> list[str] | None:
+    """Set CUDA_VISIBLE_DEVICES from --gpu_ids before torch is imported."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    gpu_ids = None
+    skip = False
+    for item in argv:
+        if skip:
+            gpu_ids = item
+            skip = False
+            continue
+        if item == "--gpu_ids":
+            skip = True
+            continue
+        if item.startswith("--gpu_ids="):
+            gpu_ids = item.split("=", 1)[1]
+    if gpu_ids is None:
+        return None
+    ids = [item.strip() for item in gpu_ids.split(",") if item.strip()]
+    if not ids or any(not item.isdigit() for item in ids):
+        raise SystemExit("--gpu_ids must be a comma-separated list of GPU indices, for example 0,1.")
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(ids)
+    return ids
 
 
 def maybe_relaunch(argv: list[str] | None = None) -> None:
@@ -178,11 +210,8 @@ def maybe_relaunch(argv: list[str] | None = None) -> None:
         raise SystemExit("Do not pass --gpu_ids when launching with torchrun.")
     if distributed or not known.gpu_ids:
         return
-    ids = [item.strip() for item in known.gpu_ids.split(",") if item.strip()]
-    if not ids or any(not item.isdigit() for item in ids):
-        raise SystemExit("--gpu_ids must be a comma-separated list of GPU indices, for example 0,1.")
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(ids)
-    if len(ids) == 1:
+    ids = pin_visible_gpus(argv)
+    if ids is None or len(ids) == 1:
         return
     cleaned = _strip_gpu_ids(argv)
     cmd = [
