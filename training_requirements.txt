@@ -65,6 +65,8 @@ pytest>=8.0.0
 #   sample_train_data/train.json
 #   sample_train_data/valid.json
 #   11 rows, asm_Beng -> eng_Latn
+#   sample_train_data/indic_en_22.json
+#   22 rows, one scheduled Indic language -> eng_Latn
 #
 # Each row keeps its own src_lang and tgt_lang. A file may mix the scheduled
 # Indic languages, for example ben_Beng and kan_Knda in the same JSON.

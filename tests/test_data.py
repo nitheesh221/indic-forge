@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from indictrans2_finetune.data import (
+    iter_rows,
     prepare_file,
     rows_to_pairs,
     select_training_pairs,
@@ -190,6 +191,14 @@ def test_select_training_pairs_stops_when_nothing_matches(tmp_path: Path):
     _write_pair(tmp_path, "train", "eng_Latn", "hin_Deva", 1)
     with pytest.raises(SystemExit, match="indic-en"):
         select_training_pairs(tmp_path, "ai4bharat/indictrans2-indic-en-dist-200M")
+
+
+def test_indic_en_sample_has_one_row_per_scheduled_language():
+    pairs, skipped = rows_to_pairs(iter_rows(ROOT / "sample_train_data" / "indic_en_22.json"))
+    assert skipped == 0
+    assert len(pairs) == 22
+    assert {tgt for _src, tgt, _text, _ref in pairs} == {"eng_Latn"}
+    assert len({src for src, _tgt, _text, _ref in pairs}) == 22
 
 
 def test_recipe_tab_languages_cover_sample():
