@@ -34,7 +34,7 @@ JSONL rows may look like this:
 {"src": "PAN and Aadhaar have been successfully linked.", "tgt": "पैन और आधार सफलतापूर्वक लिंक हो गए हैं।", "src_lang": "eng_Latn", "tgt_lang": "hin_Deva"}
 ```
 
-CSV needs a header with `src,tgt` (and optional `src_lang,tgt_lang`). If the language columns are missing, pass `--src-lang` / `--tgt-lang`.
+CSV needs a header with `src,tgt`. Language columns are optional when every row is the same pair and you pass `--src-lang` / `--tgt-lang` to `prepare`. A mixed Indic-to-English file must include `src_lang` and `tgt_lang` on every row; `sample_train_data/indic_en_22.json` is one row per scheduled Indic language.
 
 ```bash
 indictrans2-ft prepare \
@@ -70,17 +70,17 @@ Use `indictrans2-ft langs` for every FLORES tag the models accept.
 
 Pass `--adapter_path` to continue an adapter. With `--train_mode full`, that adapter is merged before full fine-tuning.
 
-One GPU:
+`--src_lang` and `--tgt_lang` are optional. Leave them off and each JSON row is trained with its own `src_lang` / `tgt_lang`. Every pair whose direction matches the checkpoint is used. On `indictrans2-indic-en-dist-200M`, that is Indic → English; a row aimed the other way is skipped and counted. Pass both flags only when you want one pair, such as `--src_lang asm_Beng --tgt_lang eng_Latn`.
+
+One GPU, mixed JSON (tags come from the file):
 
 ```bash
 python train.py \
   --gpu_ids 0 \
-  --model_hf_id ai4bharat/indictrans2-en-indic-dist-200M \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
   --train_mode lora \
-  --train_json data/sample/train.jsonl \
-  --val_json data/sample/dev.jsonl \
-  --src_lang eng_Latn \
-  --tgt_lang hin_Deva \
+  --train_json sample_train_data/indic_en_22.json \
+  --val_json sample_train_data/indic_en_22.json \
   --output_dir it2_out/lora \
   --final_model_dir it2_out/lora/final_model \
   --epochs 2 \
@@ -97,28 +97,25 @@ Several GPUs — do not also pass `--gpu_ids`:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py \
-  --model_hf_id ai4bharat/indictrans2-en-indic-dist-200M \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
   --train_mode lora \
-  --train_json data/sample/train.jsonl \
-  --val_json data/sample/dev.jsonl \
-  --src_lang eng_Latn --tgt_lang hin_Deva \
+  --train_json sample_train_data/indic_en_22.json \
+  --val_json sample_train_data/indic_en_22.json \
   --output_dir it2_out/lora \
   --bf16 --eval_strategy epoch --save_strategy epoch
 ```
 
-Ready-made wrappers: `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, `scripts/train_full.sh`. Each wrapper lists every `train.py` argument, including parser defaults, mode-specific values, optional boolean flags, and mutually exclusive data inputs. Values are environment-overridable for Docker/Kubeflow:
+Ready-made wrappers: `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, `scripts/train_full.sh`. Each wrapper lists every `train.py` argument. `SRC_LANG` and `TGT_LANG` default to empty, so the JSON tags are used. Set those two only to filter one pair:
 
 ```bash
 TRAIN_JSON=/data/train.json \
 VAL_JSON=/data/valid.json \
-SRC_LANG=asm_Beng \
-TGT_LANG=eng_Latn \
 MODEL_HF_ID=ai4bharat/indictrans2-indic-en-dist-200M \
 GPU_IDS=0 \
 bash scripts/train_lora.sh
 ```
 
-Leave `SRC_LANG` and `TGT_LANG` unset to train every pair in the JSON whose direction matches the checkpoint. With `indictrans2-indic-en-dist-200M`, Bengali, Kannada, and the other scheduled Indic languages can share one file and one run, and each row keeps its own `src_lang`. Rows whose target is `eng_Latn` are trained. A row aimed the other way is skipped and counted. The same command with `--src_lang asm_Beng --tgt_lang eng_Latn` still trains only Assamese. Validation chrF++, COMET, BLEU, BERTScore, METEOR, TER, and exact match stay one combined score.
+Validation chrF++, COMET, BLEU, BERTScore, METEOR, TER, and exact match stay one combined score. Each validation sentence is generated with its own tags.
 
 If you omit `--learning_rate`, LoRA and QLoRA use `2e-4`; full and full_lora use `2e-5`. QLoRA defaults to `--optim paged_adamw_32bit`, NF4, and bfloat16 compute. Checkpoints are ranked only by `eval_loss`, `eval_entropy`, or `eval_mean_token_accuracy`.
 
@@ -147,13 +144,11 @@ indictrans2-ft eval \
   --adapter it2_out/lora/final_model
 ```
 
-`--text` and `--file` only print the translation. To score a file with the same fields as `train.json` / `valid.json` (`src_lang`, `tgt_lang`, `src_text`, `tgt_text`), pass `--json-file`. `tgt_text` is the reference. Choose one or more metrics with `--eval-metrics`; omit it to calculate all seven.
+`--text` and `--file` only print the translation and **require** `--src-lang` and `--tgt-lang`. To score a file with the same fields as `train.json` / `valid.json` (`src_lang`, `tgt_lang`, `src_text`, `tgt_text`), pass `--json-file`. `tgt_text` is the reference. Leave `--src-lang` and `--tgt-lang` off that command so each row is scored with its own tags. Pass both flags only to score one pair. Choose one or more metrics with `--eval-metrics`; omit it to calculate all seven.
 
 ```bash
 PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
-  --src-lang asm_Beng \
-  --tgt-lang eng_Latn \
+  --json-file sample_train_data/indic_en_22.json \
   --model ai4bharat/indictrans2-indic-en-dist-200M \
   --adapter it2_out/lora/final_model \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
@@ -166,7 +161,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
 
 That writes one row per sentence to `inference_predictions.csv` (`src`, `reference`, `prediction`) and one corpus row to `inference_metrics.csv`. A metric that cannot run, such as COMET when `pkg_resources` is missing, is recorded in `metric_errors`. The other scores are still written.
 
-`scripts/inference.sh` has the full command for every saved mode: LoRA, QLoRA, continued LoRA, merged `full_lora`, and `full`. Adapter modes pass `--adapter`. `full_lora` and `full` pass only `--model` pointing at `it2_out/<mode>/final_model`.
+`scripts/inference.sh` has the full command for every saved mode: LoRA, QLoRA, continued LoRA, merged `full_lora`, and `full`. It still defaults to Assamese → English. For a mixed JSON file, use the `translate --json-file` command above and omit the language flags. Adapter modes pass `--adapter`. `full_lora` and `full` pass only `--model` pointing at `it2_out/<mode>/final_model`.
 
 ```bash
 bash scripts/inference.sh
@@ -202,6 +197,7 @@ These cover language routing and data conversion. They do not download the 200M/
 
 ## Practical notes
 
+- **Language flags are optional on JSON.** Training and `--json-file` inference read `src_lang` / `tgt_lang` from each row. `--text`, `--file`, and `eval --data-dir` still need `--src-lang` and `--tgt-lang`.
 - **Direction must match the checkpoint.** English→Hindi needs `en-indic`, not `indic-en`.
 - **Preprocessing is required.** Training and inference run `IndicProcessor` the same way as the official LoRA script (including `is_target=True` on the target side).
 - **fp16 is used only on CUDA.** CPU training is possible but not useful for the 1B models.
