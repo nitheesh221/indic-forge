@@ -90,4 +90,4 @@ Even then, the usual order is still: SFT on whatever parallel text you do have, 
 
 ## What the code does
 
-`--train_method` accepts `sft` only. Any other name stops the program and points back to this file. There is no half-implemented PPO, GRPO, DPO, or KTO loop hidden behind the flag.
+There is no `--train_method` flag. Training is supervised fine-tuning, and PPO, GRPO, DPO, and KTO are not implemented. The flag you do pass is `--train_mode` (`full`, `full_lora`, `lora`, or `qlora`), which only chooses which weights receive that update.

@@ -24,7 +24,7 @@ A student walkthrough of the whole setup (architecture, data, GPUs, models, SFT,
 
 ### 1. Training method → **SFT only**
 
-Training is supervised fine-tuning: the model learns to produce the reference translation token by token. `--train_method` accepts only `sft`. `lora`, `qlora`, `full_lora`, and `full` change which weights are updated, not the objective. Label smoothing defaults to `0.1`.
+Training is supervised fine-tuning: the model learns to produce the reference translation token by token. There is no method flag, because PPO, GRPO, DPO, and KTO are not implemented. `lora`, `qlora`, `full_lora`, and `full` change which weights are updated, not the objective. Label smoothing defaults to `0.1`.
 
 Why this setup does not use PPO, GRPO, DPO, or KTO is explained in plain language, with the papers behind that choice, in [docs/why-sft.md](docs/why-sft.md).
 
@@ -130,7 +130,6 @@ One GPU, mixed JSON (tags come from the file):
 python train.py \
   --gpu_ids 0 \
   --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
-  --train_method sft \
   --train_mode lora \
   --distribution auto \
   --train_json sample_train_data/indic_en_22.json \

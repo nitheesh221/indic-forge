@@ -6,7 +6,7 @@ import pytest
 from indictrans2_finetune.analyze import analyze_run, _token_edit_rate
 from indictrans2_finetune.callbacks import CheckpointRetentionCallback, retention_count
 from indictrans2_finetune.config import parse_args
-from indictrans2_finetune.methods import recommend_distribution, validate_train_method
+from indictrans2_finetune.methods import recommend_distribution
 
 BASE = "ai4bharat/indictrans2-en-indic-dist-200M"
 
@@ -33,21 +33,14 @@ def _args(**extra):
     return parse_args(argv)
 
 
-def test_sft_is_default_method():
+def test_sft_defaults_have_no_method_flag():
     args = _args()
-    assert args.train_method == "sft"
+    assert not hasattr(args, "train_method")
     assert args.label_smoothing_factor == 0.1
     assert args.top_n_checkpoints == 3
     assert args.last_k_checkpoints == 2
     assert args.distribution == "auto"
     assert args.keep_checkpoints == 5
-
-
-def test_only_sft_is_accepted():
-    with pytest.raises(SystemExit, match="SFT only"):
-        validate_train_method("grpo")
-    with pytest.raises(SystemExit):
-        _args(train_method="grpo")
 
 
 def test_recommend_distribution():

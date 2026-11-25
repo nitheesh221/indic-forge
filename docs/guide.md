@@ -108,7 +108,7 @@ Pick the checkpoint in this order.
 
 ## Training method
 
-This repo trains with supervised fine-tuning only. `--train_method` accepts `sft` and rejects `ppo`, `grpo`, `dpo`, and `kto`.
+This repo trains with supervised fine-tuning only. There is no `--train_method` flag, because PPO, GRPO, DPO, and KTO are not implemented. The choice you pass is `--train_mode`, which only picks which weights move.
 
 SFT fits this data because each row already has the correct translation. The model is not asked to invent a sentence and then get a score from a reward model. PPO, GRPO, DPO, and KTO are for that second situation. The IndicTrans2 paper's own quality gain on human bitext came from another supervised stage, not from those methods.
 

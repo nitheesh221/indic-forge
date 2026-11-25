@@ -9,7 +9,6 @@ from pathlib import Path
 
 from indictrans2_finetune.callbacks import retention_count
 from indictrans2_finetune.langs import direction_for, normalize_lang
-from indictrans2_finetune.methods import TRAIN_METHODS, validate_train_method
 
 TRAIN_MODES = ("full", "full_lora", "lora", "qlora")
 DISTRIBUTIONS = ("auto", "ddp", "zero2", "zero3", "offload", "fsdp", "deepspeed")
@@ -48,12 +47,6 @@ def deepspeed_config(filename: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Fine-tune IndicTrans2 (full, full_lora, lora, qlora)."
-    )
-    parser.add_argument(
-        "--train_method",
-        choices=TRAIN_METHODS,
-        default="sft",
-        help="Training objective. Only sft (teacher-forced cross-entropy). See docs/why-sft.md.",
     )
     parser.add_argument("--train_mode", choices=TRAIN_MODES, default="lora")
     parser.add_argument("--adapter_path", default=None)
@@ -223,7 +216,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
-    args.train_method = validate_train_method(args.train_method)
     if args.train_mode == "full_qlora":
         raise SystemExit("full_qlora is not supported. Use full_lora or qlora.")
     if args.bf16 and args.fp16:

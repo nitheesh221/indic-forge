@@ -14,7 +14,8 @@
 # full_qlora (rejected in Qwen; still rejected here)
 # PPO / GRPO / DPO / KTO are not training options. See docs/why-sft.md.
 
-# Training method: --train_method sft only. label_smoothing_factor default 0.1.
+# Training is supervised fine-tuning. There is no --train_method flag.
+# label_smoothing_factor default 0.1.
 # Distribution: --distribution auto (default) | ddp | zero2 | zero3 | offload.
 #   fsdp is advanced. deepspeed is the old name for zero2.
 #   QLoRA allows only auto and ddp. See docs/distribution.md.

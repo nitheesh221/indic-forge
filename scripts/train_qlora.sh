@@ -49,7 +49,6 @@ ARGS=(
   --metric_for_best_model "${METRIC_FOR_BEST_MODEL:-eval_loss}"
   --top_n_checkpoints "${TOP_N_CHECKPOINTS:-3}"
   --last_k_checkpoints "${LAST_K_CHECKPOINTS:-2}"
-  --train_method "${TRAIN_METHOD:-sft}"
   --label_smoothing_factor "${LABEL_SMOOTHING_FACTOR:-0.1}"
   --distribution "${DISTRIBUTION:-auto}"
   --fsdp "${FSDP:-full_shard auto_wrap}"

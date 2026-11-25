@@ -113,7 +113,7 @@ def run(args) -> Path:
     trainer = Seq2SeqTrainer(**trainer_kwargs)
     trainer_box["model"] = trainer.model
     print(
-        f" | > method={args.train_method} mode={args.train_mode} "
+        f" | > mode={args.train_mode} "
         f"distribution={args.distribution} model={args.model_id} "
         f"train={len(train_dataset)} dev={len(eval_dataset)} "
         f"checkpoints=top{args.top_n_checkpoints}+last{args.last_k_checkpoints}"
@@ -123,7 +123,6 @@ def run(args) -> Path:
     if trainer.is_world_process_zero():
         state = trainer.state
         meta = {
-            "train_method": args.train_method,
             "train_mode": args.train_mode,
             "distribution": args.distribution,
             "model_hf_id": args.model_hf_id,

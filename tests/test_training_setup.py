@@ -64,7 +64,6 @@ def test_mode_defaults():
     qlora = _args("qlora")
     assert qlora.optim == "paged_adamw_32bit"
     assert qlora.keep_checkpoints == 5
-    assert qlora.train_method == "sft"
     assert qlora.top_n_checkpoints == 3
     assert qlora.last_k_checkpoints == 2
 
