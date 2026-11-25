@@ -9,7 +9,7 @@ from pathlib import Path
 
 from indictrans2_finetune.callbacks import retention_count
 from indictrans2_finetune.langs import direction_for, normalize_lang
-from indictrans2_finetune.methods import ALL_METHODS, validate_train_method
+from indictrans2_finetune.methods import TRAIN_METHODS, validate_train_method
 
 TRAIN_MODES = ("full", "full_lora", "lora", "qlora")
 DISTRIBUTIONS = ("auto", "ddp", "fsdp", "deepspeed")
@@ -37,9 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--train_method",
-        choices=ALL_METHODS,
+        choices=TRAIN_METHODS,
         default="sft",
-        help="Optimization method. sft is the supported default; grpo/dpo are reserved.",
+        help="Training objective. Only sft (teacher-forced cross-entropy). See docs/why-sft.md.",
     )
     parser.add_argument("--train_mode", choices=TRAIN_MODES, default="lora")
     parser.add_argument("--adapter_path", default=None)

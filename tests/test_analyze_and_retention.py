@@ -43,13 +43,11 @@ def test_sft_is_default_method():
     assert args.keep_checkpoints == 5
 
 
-def test_grpo_is_rejected():
-    with pytest.raises(SystemExit, match="not available"):
+def test_only_sft_is_accepted():
+    with pytest.raises(SystemExit, match="SFT only"):
         validate_train_method("grpo")
-    with pytest.raises(SystemExit, match="not available"):
+    with pytest.raises(SystemExit):
         _args(train_method="grpo")
-    with pytest.raises(SystemExit, match="not available"):
-        validate_train_method("kto")
 
 
 def test_recommend_distribution():

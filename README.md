@@ -20,18 +20,13 @@ GPU is strongly recommended for training. Distilled models can run inference on 
 
 ## Recommended setup (research decisions)
 
-### 1. Training method → **SFT** (not GRPO by default)
+### 1. Training method → **SFT only**
 
-IndicTrans2 is an encoder–decoder MT model. With parallel text the right objective is **supervised fine-tuning (SFT)**: teacher-forced cross-entropy on target tokens, which is what AI4Bharat’s official LoRA script uses.
+Training is supervised fine-tuning: the model learns to produce the reference translation token by token. `--train_method` accepts only `sft`. `lora`, `qlora`, `full_lora`, and `full` change which weights are updated, not the objective. Label smoothing defaults to `0.1`.
 
-| Method | When it fits IndicTrans2 | Status here |
-| --- | --- | --- |
-| **SFT** | You have parallel `src`/`tgt` (normal case) | **Default** (`--train_method sft`) |
-| GRPO / PPO | Second stage: K samples + reference-free reward (e.g. LaBSE/COMET-Kiwi) when parallel data is thin | Reserved; rejected until implemented |
-| DPO / ORPO | You already have chosen/rejected pairs | Reserved; rejected |
-| KTO | Preference-style alignment without paired rejects (shown on Indic *LLM* MT) | Reserved; rejected |
+Why this setup does not use PPO, GRPO, DPO, or KTO is explained in plain language, with the papers behind that choice, in [docs/why-sft.md](docs/why-sft.md).
 
-`--train_mode lora|qlora|full_lora|full` only changes *what parameters update* under SFT. Label smoothing defaults to `0.1` (set `--label_smoothing_factor 0` to disable). Training ends by writing `rca_report.html` unless you pass `--no-write_rca`.
+Training writes `rca_report.html` unless you pass `--no-write_rca`.
 
 ### 2. Checkpoints → **Top-K ∪ Last-K**
 

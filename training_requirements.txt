@@ -12,10 +12,9 @@
 # TRL SFTTrainer prompt-token masking (this is seq2seq NMT, not VL OCR)
 # OCR metrics: cer wer anls token_set_ratio wratio hallucination_rate
 # full_qlora (rejected in Qwen; still rejected here)
-# GRPO / DPO training loops (reserved; SFT is the supported method)
+# PPO / GRPO / DPO / KTO are not training options. See docs/why-sft.md.
 
-# Training method: --train_method sft (default). label_smoothing_factor default 0.1.
-# Reserved (rejected): grpo, dpo, kto — second-stage / preference methods.
+# Training method: --train_method sft only. label_smoothing_factor default 0.1.
 # DeepSpeed / FSDP: supported via --distribution deepspeed|fsdp (not for QLoRA).
 # --write_rca / --no-write_rca  default: write rca_report.html after train.
 
