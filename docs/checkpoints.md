@@ -64,7 +64,7 @@ The report from `indictrans2-ft analyze` shows the same table.
 
 ## What `final_model` is
 
-When training finishes, the code saves whatever weights are in memory to `--final_model_dir`. The default path is `<output_dir>/final_model`. For `full_lora`, the LoRA adapter is merged into the base model before that save. `finetune_meta.json` is written next to those weights.
+When training finishes, the code saves whatever weights are in memory to `--final_model_dir`. The default path is `<output_dir>/final_model`. For `full_lora`, the LoRA adapter is merged into the base model before that save, except under ZeRO or FSDP, where a local merge would see only a shard and the adapter is saved unmerged. `finetune_meta.json` is written next to those weights by rank 0. It names `best_model_checkpoint`, `best_metric`, and `epochs_completed`. On more than one GPU, ZeRO and FSDP still enter the save on every rank so the shards can be gathered. Only rank 0 writes the files.
 
 Whether those weights are the best epoch or the last step depends on one switch inside the trainer: reload the best checkpoint at the end.
 

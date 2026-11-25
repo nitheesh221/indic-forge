@@ -86,7 +86,9 @@ def preprocess_logits_for_metrics(logits, labels):
     token_count = mask.sum(dim=-1).clamp(min=1)
     mean_entropy = (entropy * mask).sum(dim=-1) / token_count
     accuracy = ((predictions.eq(labels) & mask).sum(dim=-1)) / token_count
-    return torch.stack([mean_entropy, accuracy], dim=-1).detach().cpu()
+    # Stay on the logits device. A CPU copy makes the NCCL all-gather fail
+    # with "Tensors must be CUDA and dense" as soon as two GPUs evaluate.
+    return torch.stack([mean_entropy, accuracy], dim=-1).detach()
 
 
 def token_stats(eval_preds):

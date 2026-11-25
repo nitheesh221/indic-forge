@@ -147,7 +147,7 @@ python train.py \
   --last_k_checkpoints 2
 ```
 
-Several GPUs — do not also pass `--gpu_ids`:
+Several GPUs — do not also pass `--gpu_ids`. Each GPU translates its own slice of the dev set, and `--ddp_timeout` defaults to 4 hours so that beam search does not trip the 30-minute watchdog:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py \

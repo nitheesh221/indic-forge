@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 from pathlib import Path
@@ -8,9 +9,15 @@ import torch
 from indictrans2_finetune.callbacks import (
     CheckpointRetentionCallback,
     TopNCheckpointCallback,
+    TranslationMetricsCallback,
+    _append_row,
+    assemble_translations,
     generate_translations,
+    resolve_log_path,
     retention_count,
+    translation_slices,
 )
+from indictrans2_finetune import callbacks as callbacks_module
 from indictrans2_finetune.config import maybe_relaunch, parse_args, pin_visible_gpus
 from indictrans2_finetune.infer import (
     overlay_checkpoint,
@@ -18,7 +25,7 @@ from indictrans2_finetune.infer import (
     tokenizer_source,
 )
 from indictrans2_finetune.metrics_mt import exact_match, normalize_exact, score_translations
-from indictrans2_finetune.runner import _prepare_gradient_checkpointing
+from indictrans2_finetune.runner import _prepare_gradient_checkpointing, _training_arguments, _world_size
 from indictrans2_finetune.toolkit import IndicBatchCollator
 from indictrans2_finetune.train import preprocess_logits_for_metrics, token_stats
 
@@ -192,6 +199,8 @@ def test_token_statistics():
     logits = torch.tensor([[[5.0, 0.0], [0.0, 5.0]]])
     labels = torch.tensor([[0, -100]])
     stats = preprocess_logits_for_metrics(logits, labels)
+    assert stats.device == logits.device
+    assert not stats.requires_grad
     result = token_stats(type("Preds", (), {"predictions": stats.numpy()})())
     assert result["mean_token_accuracy"] == 1.0
     assert result["entropy"] < 0.1
@@ -357,3 +366,160 @@ def test_zero2_relaunches_even_for_one_gpu(monkeypatch):
         maybe_relaunch(["--gpu_ids", "0", "--distribution", "zero2", "--model_hf_id", BASE])
     assert launched["argv"][2] == "torch.distributed.run"
     assert launched["argv"][4] == "1"
+
+
+def test_ddp_timeout_defaults_and_reaches_the_trainer(monkeypatch):
+    args = _args("lora")
+    assert args.ddp_timeout == 14400
+    with pytest.raises(SystemExit):
+        _args("lora", ddp_timeout=0)
+    captured = {}
+
+    class FakeArguments:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self._n_gpu = 1
+
+    monkeypatch.setattr(
+        "indictrans2_finetune.runner.Seq2SeqTrainingArguments", FakeArguments
+    )
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    _training_arguments(args)
+    assert captured["ddp_timeout"] == 14400
+    assert captured["group_by_length"] is True
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    _training_arguments(args)
+    assert captured["group_by_length"] is False
+    assert _world_size() == 2
+
+
+def test_translation_slices_and_assemble_keep_sentence_order():
+    assert translation_slices(5, 0, 2) == [0, 2, 4]
+    assert translation_slices(5, 1, 2) == [1, 3]
+    hypotheses, failure = assemble_translations(
+        [
+            {"rows": [(0, "a0"), (2, "a2"), (4, "a4")], "error": None},
+            {"rows": [(1, "b1"), (3, "b3")], "error": None},
+        ],
+        5,
+    )
+    assert failure is None
+    assert hypotheses == ["a0", "b1", "a2", "b3", "a4"]
+    missing, reason = assemble_translations(
+        [
+            {"rows": [], "error": "rank 0: RuntimeError: oom"},
+            {"rows": [(1, "b1")], "error": None},
+        ],
+        2,
+    )
+    assert missing is None
+    assert "oom" in reason
+
+
+def test_log_path_is_not_nested_twice(tmp_path: Path):
+    assert resolve_log_path(tmp_path, "eval_metrics.csv") == tmp_path / "eval_metrics.csv"
+    explicit = Path("it2_out/x/eval_metrics.csv")
+    assert resolve_log_path(tmp_path, str(explicit)) == explicit
+
+
+def test_csv_header_grows_when_a_later_row_adds_columns(tmp_path: Path):
+    path = tmp_path / "eval_metrics.csv"
+    _append_row(path, {"step": 1, "metric_errors": "generation failed: RuntimeError"})
+    _append_row(path, {"step": 2, "eval_loss": 0.5, "chrf2pp": 41.2, "metric_errors": ""})
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[1]["chrf2pp"] == "41.2"
+    assert rows[0]["step"] == "1"
+    assert rows[1]["eval_loss"] == "0.5"
+
+
+def test_retention_waits_for_other_ranks_before_deleting(tmp_path: Path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(callbacks_module, "barrier", lambda: calls.append("barrier"))
+    checkpoint = tmp_path / "checkpoint-1"
+    checkpoint.mkdir()
+    callback = TopNCheckpointCallback("eval_loss", greater_is_better=False, keep=1)
+    state = type(
+        "State",
+        (),
+        {"is_world_process_zero": False, "global_step": 1, "log_history": [{"eval_loss": 0.4}]},
+    )()
+    args = type("Args", (), {"output_dir": str(tmp_path)})()
+    callback.on_save(args, state, None)
+    assert calls == ["barrier"]
+    assert checkpoint.exists()
+
+
+def test_each_rank_translates_its_own_slice(tmp_path: Path, monkeypatch):
+    generated = []
+
+    def fake_generate(_model, _tokenizer, _processor, sentences, *_args, **_kwargs):
+        generated.append(list(sentences))
+        return [f"hyp:{sentence}" for sentence in sentences]
+
+    def all_gather(output, payload):
+        output[0] = payload
+        output[1] = {"rows": [(1, "hyp:b")], "error": None}
+
+    monkeypatch.setattr(callbacks_module, "get_processor", lambda **_kwargs: object())
+    monkeypatch.setattr(callbacks_module, "generate_translations", fake_generate)
+    monkeypatch.setattr(callbacks_module, "distributed_rank_and_world", lambda: (0, 2))
+    monkeypatch.setattr(callbacks_module, "score_translations", lambda *_a, **_k: ({"chrf2pp": 12.5}, {}))
+    monkeypatch.setattr(callbacks_module.dist, "all_gather_object", all_gather)
+    monkeypatch.setattr(callbacks_module.dist, "broadcast_object_list", lambda holder, src=0: None)
+    args = _args("lora", output_dir=str(tmp_path))
+    callback = TranslationMetricsCallback(
+        {"tokenizer": object(), "model": object()},
+        ["a", "b"],
+        ["ra", "rb"],
+        args,
+        src_langs=["eng_Latn", "eng_Latn"],
+        tgt_langs=["hin_Deva", "hin_Deva"],
+    )
+    metrics = {"eval_loss": 0.2}
+    state = type("State", (), {"global_step": 4})()
+    callback.on_evaluate(None, state, None, metrics=metrics, model=object())
+    assert generated == [["a"]]
+    assert metrics["chrf2pp"] == 12.5
+    with (tmp_path / "eval_metrics.csv").open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["chrf2pp"] == "12.5"
+    with (tmp_path / "eval_samples.csv").open(encoding="utf-8", newline="") as handle:
+        samples = list(csv.DictReader(handle))
+    assert [sample["hyp"] for sample in samples] == ["hyp:a", "hyp:b"]
+
+
+def test_a_failed_slice_still_joins_the_gather(tmp_path: Path, monkeypatch):
+    gathered = {}
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("oom")
+
+    def all_gather(output, payload):
+        gathered["payload"] = payload
+        output[0] = payload
+        output[1] = {"rows": [(1, "hyp:b")], "error": None}
+
+    monkeypatch.setattr(callbacks_module, "get_processor", lambda **_kwargs: object())
+    monkeypatch.setattr(callbacks_module, "generate_translations", explode)
+    monkeypatch.setattr(callbacks_module, "distributed_rank_and_world", lambda: (0, 2))
+    monkeypatch.setattr(callbacks_module.dist, "all_gather_object", all_gather)
+    monkeypatch.setattr(callbacks_module.dist, "broadcast_object_list", lambda holder, src=0: None)
+    args = _args("lora", output_dir=str(tmp_path))
+    callback = TranslationMetricsCallback(
+        {"tokenizer": object(), "model": object()},
+        ["a", "b"],
+        ["ra", "rb"],
+        args,
+        src_langs=["eng_Latn", "eng_Latn"],
+        tgt_langs=["hin_Deva", "hin_Deva"],
+    )
+    metrics = {}
+    state = type("State", (), {"global_step": 4})()
+    callback.on_evaluate(None, state, None, metrics=metrics, model=object())
+    assert "oom" in gathered["payload"]["error"]
+    assert "chrf2pp" not in metrics
+    with (tmp_path / "eval_metrics.csv").open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert "oom" in row["metric_errors"]
+    assert not (tmp_path / "eval_samples.csv").exists()

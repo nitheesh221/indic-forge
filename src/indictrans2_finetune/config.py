@@ -191,6 +191,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="FSDP strategy string used only when --distribution fsdp.",
     )
     parser.add_argument("--gpu_ids", default=None)
+    parser.add_argument(
+        "--ddp_timeout",
+        type=int,
+        default=14400,
+        help=(
+            "Seconds a rank waits for the others before the process group is killed. "
+            "The default is 4 hours so a long validation generation does not hit the "
+            "30-minute NCCL watchdog. Applies to DDP and DeepSpeed because the "
+            "training arguments open the process group."
+        ),
+    )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--bf16", action="store_true")
@@ -221,6 +232,8 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("Pass --train_json and --val_json, or pass --data_dir.")
     if args.label_smoothing_factor < 0 or args.label_smoothing_factor >= 1:
         raise SystemExit("--label_smoothing_factor must be in [0, 1).")
+    if args.ddp_timeout < 1:
+        raise SystemExit("--ddp_timeout must be a positive number of seconds.")
     if args.learning_rate is None:
         args.learning_rate = 2e-4 if args.train_mode in {"lora", "qlora"} else 2e-5
     if args.optim is None:

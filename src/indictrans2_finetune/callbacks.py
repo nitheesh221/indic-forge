@@ -13,10 +13,68 @@ import shutil
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from transformers import TrainerCallback
 
 from indictrans2_finetune.metrics_mt import score_translations
 from indictrans2_finetune.toolkit import get_processor
+
+
+def distributed_rank_and_world() -> tuple[int, int]:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank(), dist.get_world_size()
+    return 0, 1
+
+
+def barrier() -> None:
+    """Wait for every rank. No-op when this process is not in a process group."""
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+        dist.barrier()
+
+
+def resolve_log_path(output_dir: Path, name: str) -> Path:
+    """Bare file names go under output_dir. A path that already has a directory does not.
+
+    ``eval_metrics.csv`` becomes ``<output_dir>/eval_metrics.csv``.
+    ``it2_out/x/eval_metrics.csv`` stays that path, so it is not nested a second time.
+    """
+    path = Path(name)
+    if path.is_absolute() or path.parent != Path("."):
+        return path
+    return Path(output_dir) / path
+
+
+def translation_slices(n: int, rank: int, world: int) -> list[int]:
+    """Indices this rank translates. Stride keeps each sentence on one rank."""
+    if world < 1:
+        raise ValueError("world must be positive")
+    if rank < 0 or rank >= world:
+        raise ValueError(f"rank {rank} is outside world {world}")
+    return list(range(rank, n, world))
+
+
+def assemble_translations(gathered: list[dict], n: int) -> tuple[list[str] | None, str | None]:
+    """Zip per-rank slices back into source order.
+
+    A failure on any rank drops the partial hypotheses. Scoring a short list
+    against the full reference would report the wrong chrF++.
+    """
+    if any(item is None for item in gathered):
+        return None, "a rank returned no translations"
+    problems = [str(item.get("error")) for item in gathered if item.get("error")]
+    if problems:
+        return None, " | ".join(problems)
+    hypotheses = [""] * n
+    seen: set[int] = set()
+    for item in gathered:
+        for index, hypothesis in item.get("rows") or []:
+            if not isinstance(index, int) or index < 0 or index >= n or index in seen:
+                return None, f"bad translation index {index}"
+            hypotheses[index] = hypothesis
+            seen.add(index)
+    if len(seen) != n:
+        return None, f"gathered {len(seen)} of {n} translations"
+    return hypotheses, None
 
 
 def retention_count(top_k: int, last_k: int, save_total_limit: int | None = None) -> int:
@@ -70,6 +128,10 @@ class CheckpointRetentionCallback(TrainerCallback):
         self.scored: list[tuple[float, int, str]] = []
 
     def on_save(self, args, state, control, **kwargs):
+        # Every rank reaches this, including ranks that do not delete. The
+        # barrier has to run before the rank check so rank 0 cannot remove a
+        # folder another rank is still writing.
+        barrier()
         if not state.is_world_process_zero:
             return
         checkpoint = Path(args.output_dir) / f"checkpoint-{state.global_step}"
@@ -191,62 +253,94 @@ class TranslationMetricsCallback(TrainerCallback):
         self.processor = get_processor(inference=True)
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if not state.is_world_process_zero:
-            return
-        model = kwargs.get("model") or self.trainer_box.get("model")
-        tokenizer = self.trainer_box["tokenizer"]
+        rank, world = distributed_rank_and_world()
+        indices = translation_slices(len(self.sources), rank, world)
+        local_error = None
+        rows: list[tuple[int, str]] = []
         try:
-            hypotheses = generate_translations(
-                model,
-                tokenizer,
-                self.processor,
-                self.sources,
-                self.src_langs[0],
-                self.tgt_langs[0],
-                self.user_args.eval_max_new_tokens,
-                self.user_args.generation_num_beams,
-                self.user_args.eval_batch_size,
-                src_langs=self.src_langs,
-                tgt_langs=self.tgt_langs,
-            )
-        except Exception as exc:  # noqa: BLE001 — translation scores must not abort training
+            if indices:
+                model = kwargs.get("model") or self.trainer_box.get("model")
+                hypotheses = generate_translations(
+                    model,
+                    self.trainer_box["tokenizer"],
+                    self.processor,
+                    [self.sources[index] for index in indices],
+                    self.src_langs[indices[0]],
+                    self.tgt_langs[indices[0]],
+                    self.user_args.eval_max_new_tokens,
+                    self.user_args.generation_num_beams,
+                    self.user_args.eval_batch_size,
+                    src_langs=[self.src_langs[index] for index in indices],
+                    tgt_langs=[self.tgt_langs[index] for index in indices],
+                )
+                if len(hypotheses) != len(indices):
+                    raise RuntimeError(
+                        f"rank {rank} produced {len(hypotheses)} translations for {len(indices)} sentences"
+                    )
+                rows = list(zip(indices, hypotheses))
+        except Exception as exc:  # noqa: BLE001 — every rank must still enter the gather
+            local_error = f"rank {rank}: {type(exc).__name__}: {exc}"
+            rows = []
+        payload = {"rows": rows, "error": local_error}
+        if world > 1:
+            gathered: list[dict | None] = [None] * world
+            dist.all_gather_object(gathered, payload)
+        else:
+            gathered = [payload]
+        hypotheses, failure = assemble_translations(gathered, len(self.sources))
+        scores: dict = {}
+        errors: dict = {}
+        if rank == 0:
             output = Path(self.user_args.output_dir)
-            _append_row(
-                output / self.user_args.eval_metrics_csv,
-                {
+            metrics_path = resolve_log_path(output, self.user_args.eval_metrics_csv)
+            if failure or hypotheses is None:
+                _append_row(
+                    metrics_path,
+                    {
+                        "step": state.global_step,
+                        "metric_errors": f"generation failed: {failure}",
+                    },
+                )
+            else:
+                scores, errors = score_translations(
+                    self.sources,
+                    hypotheses,
+                    self.references,
+                    self.user_args.eval_metrics,
+                )
+                metric_row = {
                     "step": state.global_step,
-                    "metric_errors": f"generation failed: {type(exc).__name__}: {exc}",
-                },
+                    **{key: _plain(value) for key, value in (metrics or {}).items()},
+                }
+                metric_row.update({key: "" if value is None else value for key, value in scores.items()})
+                if errors:
+                    metric_row["metric_errors"] = " | ".join(
+                        f"{name}: {msg}" for name, msg in errors.items()
+                    )
+                _append_row(metrics_path, metric_row)
+                sample_rows = [
+                    {
+                        "step": state.global_step,
+                        "src_lang": src_lang,
+                        "tgt_lang": tgt_lang,
+                        "src": src,
+                        "ref": ref,
+                        "hyp": hyp,
+                    }
+                    for src_lang, tgt_lang, src, ref, hyp in zip(
+                        self.src_langs, self.tgt_langs, self.sources, self.references, hypotheses
+                    )
+                ]
+                _append_rows(resolve_log_path(output, self.user_args.eval_samples_csv), sample_rows)
+        shared = {"ok": failure is None and hypotheses is not None, "scores": scores}
+        if world > 1:
+            holder = [shared if rank == 0 else None]
+            dist.broadcast_object_list(holder, src=0)
+            shared = holder[0]
+        if metrics is not None and shared and shared["ok"]:
+            metrics.update(
+                {key: value for key, value in shared["scores"].items() if value is not None}
             )
-            return
-        scores, errors = score_translations(
-            self.sources,
-            hypotheses,
-            self.references,
-            self.user_args.eval_metrics,
-        )
-        output = Path(self.user_args.output_dir)
-        metric_row = {"step": state.global_step, **{key: _plain(value) for key, value in (metrics or {}).items()}}
-        metric_row.update({key: "" if value is None else value for key, value in scores.items()})
-        if errors:
-            metric_row["metric_errors"] = " | ".join(f"{name}: {msg}" for name, msg in errors.items())
-        _append_row(output / self.user_args.eval_metrics_csv, metric_row)
-        sample_rows = [
-            {
-                "step": state.global_step,
-                "src_lang": src_lang,
-                "tgt_lang": tgt_lang,
-                "src": src,
-                "ref": ref,
-                "hyp": hyp,
-            }
-            for src_lang, tgt_lang, src, ref, hyp in zip(
-                self.src_langs, self.tgt_langs, self.sources, self.references, hypotheses
-            )
-        ]
-        _append_rows(output / self.user_args.eval_samples_csv, sample_rows)
-        if metrics is not None:
-            metrics.update({key: value for key, value in scores.items() if value is not None})
 
 
 def generate_translations(
@@ -324,19 +418,40 @@ def _append_row(path: Path, row: dict) -> None:
     _append_rows(path, [row])
 
 
+def _fieldnames(rows: list[dict]) -> list[str]:
+    names: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in names:
+                names.append(key)
+    return names
+
+
 def _append_rows(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(rows[0])
-    write_header = not path.exists()
-    if path.exists():
-        with path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames:
-                fieldnames = list(dict.fromkeys([*reader.fieldnames, *fieldnames]))
-    with path.open("a", encoding="utf-8", newline="") as handle:
+    incoming = _fieldnames(rows)
+    if not path.exists() or path.stat().st_size == 0:
+        _write_csv(path, incoming, rows)
+        return
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        existing_fields = list(reader.fieldnames or [])
+        existing = list(reader)
+    fieldnames = list(dict.fromkeys([*existing_fields, *incoming]))
+    if fieldnames == existing_fields:
+        with path.open("a", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writerows(rows)
+        return
+    # A later eval can add chrF++ after a failure row that only had metric_errors.
+    # Rewrite the header so readers keep the new columns.
+    _write_csv(path, fieldnames, [*existing, *rows])
+
+
+def _write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
+        writer.writeheader()
         writer.writerows(rows)

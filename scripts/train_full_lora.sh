@@ -63,6 +63,7 @@ ARGS=(
   --bnb_compute_dtype "${BNB_COMPUTE_DTYPE:-bfloat16}"
   --bnb_4bit_quant_type "${BNB_4BIT_QUANT_TYPE:-nf4}"
   --gpu_ids "$GPU_IDS"
+  --ddp_timeout "${DDP_TIMEOUT:-14400}"
   --num_workers "${NUM_WORKERS:-4}"
   --report_to "${REPORT_TO:-none}"
 )

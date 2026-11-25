@@ -317,7 +317,14 @@ pytest>=8.0.0
 # --gpu_ids                  default: None
 #   sets CUDA_VISIBLE_DEVICES before torch is imported
 #   one id keeps the Trainer off DataParallel (required for QLoRA)
+# --ddp_timeout              default: 14400 seconds (4 hours)
+#   how long a rank waits for the others before the process group is killed
+#   covers a long beam-search validation on DDP and DeepSpeed
+#   training arguments are built before the model loads, which pins each
+#   rank to its own GPU and opens the process group with this timeout
 # --num_workers              default: 4
+# group_by_length is on for one process and off when WORLD_SIZE > 1.
+#   Length-grouped batches can give two ranks a different number of steps.
 # --gradient_checkpointing   flag, default: false
 # --bf16 / --fp16            mutually exclusive flags
 # --distribution   choices: auto | ddp | zero2 | zero3 | offload | fsdp | deepspeed
@@ -361,11 +368,16 @@ pytest>=8.0.0
 # eval_metrics.csv         Trainer eval_* plus mean MT scores
 # eval_samples.csv         src_lang / tgt_lang / src / ref / hyp
 # training_logs.csv        Trainer log rows
+#   A bare file name is written under --output_dir.
+#   A path that already has a directory is used as given (not nested again).
+#   If a later row adds columns, the header is rewritten so those values stay.
 # rca_report.html          from `indictrans2-ft analyze`
 # --final_model_dir        full weights (full, full_lora) or adapter (lora, qlora)
-# finetune_meta.json       written next to the final model; records method,
+# finetune_meta.json       written next to the final model by rank 0; records method,
 #                          distribution, model_hf_id, train_mode, languages,
-#                          learning_rate, label smoothing, LoRA targets, metrics
+#                          learning_rate, label smoothing, LoRA targets, metrics,
+#                          best_model_checkpoint, best_metric, epochs_completed
+#   ZeRO and FSDP still enter the save on every rank. Only rank 0 writes files.
 # inference_predictions.csv   written by JSON inference (see section 18)
 # inference_metrics.csv       written by JSON inference (see section 18)
 

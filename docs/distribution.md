@@ -65,6 +65,13 @@ If you want the same batch as the one-GPU run, lower `--gradient_accumulation_st
 
 One GPU with `--distribution ddp` behaves like a normal single-process run.
 
+On two or more processes the run also does four things that a one-GPU run does not need:
+
+- Each GPU translates its own slice of the validation set. Rank 0 gathers those translations, scores them, and writes the CSVs. One GPU no longer generates the whole dev set while the other waits out the process-group timeout.
+- `--ddp_timeout` defaults to 14400 seconds (4 hours). The training arguments are built before the model loads, and that is what opens the process group, so the same timeout covers DDP and DeepSpeed.
+- Each rank is pinned to its own GPU before `from_pretrained`. Rank 0 alone converts the JSON into `prepared/` and alone writes `final_model` and `finetune_meta.json`. ZeRO and FSDP still enter the save on every rank so the shards can be gathered.
+- Length-grouped batches stay on for one process and turn off when `WORLD_SIZE` is greater than 1. Grouping can give the ranks a different number of steps, and the shorter rank then waits until the timeout.
+
 ### `zero2` — full 1B, optimizer does not fit
 
 **What.** DeepSpeed ZeRO stage 2. Each GPU still holds the full weights. The Adam optimizer state and the gradients are split across the GPUs. The config is `configs/ds_zero2.json`.
