@@ -28,13 +28,15 @@ Why this setup does not use PPO, GRPO, DPO, or KTO is explained in plain languag
 
 Training writes `rca_report.html` unless you pass `--no-write_rca`.
 
-### 2. Checkpoints → **Top-K ∪ Last-K**
+### 2. Checkpoints → **best model in `final_model`, last model in `checkpoint-<step>`**
 
-- `--top_n_checkpoints` (default `3`): keep the best SFT metric values (`eval_loss` by default).
-- `--last_k_checkpoints` (default `2`): also keep the most recent saves for resume / late-stage RCA.
-- Retention is the **union** (overlap kept once). Optional `--save_total_limit N` hard-caps the union; `0` means no extra cap.
-- MT metrics (chrF++, COMET, …) are logged for analysis and **never** select checkpoints.
-- Each save updates `checkpoint_manifest.json` under `--output_dir`.
+- `--top_n_checkpoints` (default `3`): keep the best scores (`eval_loss` by default).
+- `--last_k_checkpoints` (default `2`): also keep the most recent saves. This is Last-N. There is no second flag.
+- A checkpoint in both lists is stored once. `checkpoint_manifest.json` marks `in_top_k` and `in_last_k`.
+- With the default epoch eval and epoch save, `final_model` is the **best** model, not the last one.
+- Translation metrics are logged for the report and never choose a checkpoint.
+
+The full explanation, including when `final_model` becomes the last model and how to load a Last-N checkpoint, is [docs/checkpoints.md](docs/checkpoints.md).
 
 ### 3. Distribution → **`auto`** unless the GPU runs out of memory
 

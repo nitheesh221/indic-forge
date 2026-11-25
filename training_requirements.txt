@@ -256,8 +256,12 @@ pytest>=8.0.0
 # 7. TOP-K + LAST-K CHECKPOINTS
 # =============================================================================
 # --top_n_checkpoints    default: 3   keep best by --metric_for_best_model
-# --last_k_checkpoints   default: 2   also keep most recent
+# --last_k_checkpoints   default: 2   also keep most recent (this is Last-N)
 # Writes checkpoint_manifest.json under --output_dir after each save.
+# final_model is the best checkpoint when eval_strategy == save_strategy.
+# It is the last weights only when those strategies differ or eval is off.
+# Do not set top_n_checkpoints to 0 while best-model reload is on.
+# Guide: docs/checkpoints.md
 
 # =============================================================================
 # 8. TRANSLATION METRICS (CSV + eval command; do NOT select checkpoints)
