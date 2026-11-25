@@ -247,6 +247,35 @@ def test_batch_collator_pads_without_toolkit_helper():
     )
     assert batch["input_ids"].tolist() == [[1, 2], [0, 4]]
     assert batch["labels"].tolist() == [[3, -100], [5, 6]]
+    assert "decoder_input_ids" not in batch
+
+
+def test_collator_shifts_labels_into_decoder_inputs():
+    class Tokenizer:
+        padding_side = "right"
+        pad_token_id = 1
+        eos_token_id = 2
+
+        def pad(self, features, padding, pad_to_multiple_of, return_tensors):
+            width = max(len(feature["input_ids"]) for feature in features)
+            rows = [list(feature["input_ids"]) + [1] * (width - len(feature["input_ids"])) for feature in features]
+            return {"input_ids": torch.tensor(rows)}
+
+    class Model:
+        class Config:
+            pad_token_id = 1
+            decoder_start_token_id = 2
+
+        config = Config()
+
+    batch = IndicBatchCollator(Tokenizer(), model=Model(), pad_to_multiple_of=None)(
+        [
+            {"input_ids": [10], "labels": [3, -100, 4]},
+            {"input_ids": [11, 12], "labels": [5, 6]},
+        ]
+    )
+    assert batch["labels"].tolist() == [[3, -100, 4], [5, 6, -100]]
+    assert batch["decoder_input_ids"].tolist() == [[2, 3, 1], [2, 5, 6]]
 
 
 def test_merged_model_uses_hub_tokenizer(tmp_path: Path):

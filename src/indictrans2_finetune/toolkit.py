@@ -61,11 +61,31 @@ class IndicBatchCollator:
             self.tokenizer.padding_side = padding_side
         if labels is not None:
             batch["labels"] = self._pad_labels(labels)
-            if self.model is not None and hasattr(self.model, "prepare_decoder_input_ids_from_labels"):
-                batch["decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
-                    labels=batch["labels"]
-                )
+            # IndicTrans2 builds decoder_input_ids from labels inside forward.
+            # Trainer label smoothing removes labels before that call, so the
+            # decoder then raises "specify decoder_input_ids". Build them here.
+            if self.model is not None:
+                batch["decoder_input_ids"] = self._decoder_input_ids(batch["labels"])
         return batch
+
+    def _decoder_input_ids(self, labels):
+        prepare = getattr(self.model, "prepare_decoder_input_ids_from_labels", None)
+        if prepare is not None:
+            return prepare(labels=labels)
+        config = getattr(self.model, "config", None)
+        pad_token_id = getattr(config, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = 0
+        start_id = getattr(config, "decoder_start_token_id", None)
+        if start_id is None:
+            start_id = getattr(config, "eos_token_id", None)
+        if start_id is None:
+            start_id = getattr(self.tokenizer, "eos_token_id", None)
+        if start_id is None:
+            start_id = pad_token_id
+        return _shift_tokens_right(labels, int(pad_token_id), int(start_id))
 
     def _pad_labels(self, labels: list[list[int]]):
         import torch
@@ -78,6 +98,15 @@ class IndicBatchCollator:
             [row + [self.label_pad_token_id] * (width - len(row)) for row in labels],
             dtype=torch.long,
         )
+
+
+def _shift_tokens_right(labels, pad_token_id: int, decoder_start_token_id: int):
+    """Right-shift target labels into decoder inputs, matching IndicTrans2."""
+    shifted = labels.new_zeros(labels.shape)
+    shifted[:, 1:] = labels[:, :-1].clone()
+    shifted[:, 0] = decoder_start_token_id
+    shifted.masked_fill_(shifted == -100, pad_token_id)
+    return shifted
 
 
 def get_collator(tokenizer, model, *, pad_to_multiple_of: int | None, label_pad_token_id: int = -100):
