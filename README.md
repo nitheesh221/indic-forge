@@ -10,7 +10,7 @@ This repo follows the official data layout from [`huggingface_interface/train_lo
 - Pick the right checkpoint (`en-indic`, `indic-en`, or `indic-indic`; distilled or 1B)
 - Train with SFT under `full`, `full_lora`, `lora`, or `qlora`
 - Keep **Top-K ∪ Last-K** checkpoints and write a retention manifest
-- Multi-GPU via `--distribution auto|ddp|fsdp|deepspeed`
+- GPU use via `--distribution auto` (default), `ddp`, `zero2`, `zero3`, or `offload`
 - Offline RCA HTML from training CSVs (`indictrans2-ft analyze`)
 - Score chrF++, COMET, SacreBLEU, BERTScore, METEOR, TER, and exact match
 - A small web UI for the recipe, data conversion, and a translation box
@@ -36,28 +36,21 @@ Training writes `rca_report.html` unless you pass `--no-write_rca`.
 - MT metrics (chrF++, COMET, …) are logged for analysis and **never** select checkpoints.
 - Each save updates `checkpoint_manifest.json` under `--output_dir`.
 
-### 3. Distribution → **`auto`**, then DDP / FSDP / DeepSpeed as needed
+### 3. Distribution → **`auto`** unless the GPU runs out of memory
 
-| Strategy | Best for |
-| --- | --- |
-| `auto` (default) | 1 GPU in-process; 2+ GPUs via DDP (`torchrun`) |
-| `ddp` | LoRA / QLoRA multi-GPU (recommended) |
-| `fsdp` | Full fine-tune of the 1B when memory is tight |
-| `deepspeed` | Full FT with ZeRO-2 (`configs/ds_zero2.json`) or ZeRO-3 |
+`auto` is the default. One GPU trains in a single process. Two or more ids in `--gpu_ids` use DDP. It does not look at model size or free memory. You change the flag when your situation changes.
 
-QLoRA rejects FSDP and DeepSpeed here. Example DeepSpeed full run:
+The plain-language guide, with what each option is, why it exists, and when to turn it on, is [docs/distribution.md](docs/distribution.md).
 
 ```bash
-python train.py \
-  --gpu_ids 0,1 \
-  --distribution deepspeed \
-  --deepspeed configs/ds_zero2.json \
-  --train_mode full \
-  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
-  --train_json sample_train_data/indic_en_22.json \
-  --val_json sample_train_data/indic_en_22.json \
-  --output_dir it2_out/full_ds \
-  --bf16 --gradient_checkpointing
+# usual run: one GPU
+python train.py --gpu_ids 0 --distribution auto ...
+
+# several GPUs, model already fits
+python train.py --gpu_ids 0,1 --distribution auto ...
+
+# full 1B, optimizer still does not fit
+python train.py --gpu_ids 0,1 --distribution zero2 --train_mode full ...
 ```
 
 ### 4. Visualization / RCA → offline HTML report

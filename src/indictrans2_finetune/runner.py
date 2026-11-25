@@ -21,7 +21,7 @@ from indictrans2_finetune.callbacks import (
     CsvLogCallback,
     TranslationMetricsCallback,
 )
-from indictrans2_finetune.config import maybe_relaunch, parse_args
+from indictrans2_finetune.config import DEEPSPEED_DISTRIBUTIONS, maybe_relaunch, parse_args
 from indictrans2_finetune.data import list_pair_dirs, prepare_file, select_training_pairs
 from indictrans2_finetune.infer import sanitize_saved_tokenizer
 from indictrans2_finetune.toolkit import get_collator, get_processor
@@ -308,7 +308,11 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
         kwargs["fsdp"] = args.fsdp
         if "fsdp_config" in signature.parameters:
             kwargs["fsdp_config"] = {"min_num_params": 1_000_000}
-    if args.distribution == "deepspeed" and args.deepspeed and "deepspeed" in signature.parameters:
+    if (
+        args.distribution in DEEPSPEED_DISTRIBUTIONS
+        and args.deepspeed
+        and "deepspeed" in signature.parameters
+    ):
         kwargs["deepspeed"] = args.deepspeed
     training = Seq2SeqTrainingArguments(**kwargs)
     if getattr(args, "visible_gpu_count", None) == 1:

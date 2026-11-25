@@ -53,7 +53,7 @@ def test_only_sft_is_accepted():
 def test_recommend_distribution():
     assert recommend_distribution("lora", 1) == "auto"
     assert recommend_distribution("qlora", 2) == "ddp"
-    assert recommend_distribution("full", 2) == "fsdp"
+    assert recommend_distribution("full", 2) == "ddp"
     assert recommend_distribution("full_lora", 4) == "ddp"
 
 
@@ -150,18 +150,25 @@ def test_hard_cap_prefers_top_then_recent(tmp_path: Path):
     assert "checkpoint-3" not in kept
 
 
-def test_deepspeed_defaults_config():
-    args = _args(distribution="deepspeed")
-    assert args.distribution == "deepspeed"
-    assert args.deepspeed.endswith("ds_zero2.json")
-    assert Path(args.deepspeed).is_file()
+def test_zero_configs_are_selected():
+    zero2 = _args(distribution="zero2", train_mode="full")
+    assert zero2.distribution == "zero2"
+    assert zero2.deepspeed.endswith("ds_zero2.json")
+    assert Path(zero2.deepspeed).is_file()
+    zero3 = _args(distribution="zero3", train_mode="full")
+    assert zero3.deepspeed.endswith("ds_zero3.json")
+    offload = _args(distribution="offload", train_mode="full")
+    assert offload.deepspeed.endswith("ds_offload.json")
+    assert Path(offload.deepspeed).is_file()
+    legacy = _args(distribution="deepspeed", train_mode="full")
+    assert legacy.distribution == "zero2"
+    assert legacy.deepspeed.endswith("ds_zero2.json")
 
 
-def test_qlora_rejects_fsdp_and_deepspeed():
-    with pytest.raises(SystemExit, match="QLoRA"):
-        _args(train_mode="qlora", distribution="fsdp")
-    with pytest.raises(SystemExit, match="QLoRA"):
-        _args(train_mode="qlora", distribution="deepspeed")
+def test_qlora_rejects_shard_and_offload():
+    for name in ("fsdp", "deepspeed", "zero2", "zero3", "offload"):
+        with pytest.raises(SystemExit, match="QLoRA"):
+            _args(train_mode="qlora", distribution=name)
 
 
 def test_analyze_builds_html(tmp_path: Path):

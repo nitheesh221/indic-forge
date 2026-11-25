@@ -340,3 +340,20 @@ def test_multi_gpu_relaunch_is_not_taken_when_rank_is_absent(monkeypatch):
     # A single GPU id must stay in-process and must not replace this test process.
     maybe_relaunch(["--gpu_ids", "0", "--model_hf_id", BASE])
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
+
+
+def test_zero2_relaunches_even_for_one_gpu(monkeypatch):
+    monkeypatch.delenv("RANK", raising=False)
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    launched = {}
+
+    def fake_exec(cmd, argv, env):
+        launched["cmd"] = cmd
+        launched["argv"] = argv
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvpe", fake_exec)
+    with pytest.raises(SystemExit):
+        maybe_relaunch(["--gpu_ids", "0", "--distribution", "zero2", "--model_hf_id", BASE])
+    assert launched["argv"][2] == "torch.distributed.run"
+    assert launched["argv"][4] == "1"

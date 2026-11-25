@@ -25,17 +25,15 @@ def validate_train_method(method: str) -> str:
 
 
 def recommend_distribution(train_mode: str, n_gpus: int | None) -> str:
-    """Pick a sensible --distribution given mode and GPU count.
+    """Default distribution from mode and GPU count. Memory is not inspected.
 
-    LoRA / QLoRA / full_lora: DDP when multi-GPU (FSDP+PEFT is fragile).
-    Full FT: FSDP when multi-GPU and memory is the bottleneck; otherwise DDP.
-    Single GPU: auto (in-process).
+    One GPU stays ``auto`` (single process). Several GPUs use DDP, including
+    full fine-tuning. ZeRO-2, ZeRO-3, and CPU offload are manual switches for
+    when a full 1B run does not fit. See docs/distribution.md.
     """
     gpus = 1 if n_gpus is None else max(1, int(n_gpus))
     if gpus <= 1:
         return "auto"
-    if train_mode in {"lora", "qlora", "full_lora"}:
+    if train_mode in {"lora", "qlora", "full_lora", "full"}:
         return "ddp"
-    if train_mode == "full":
-        return "fsdp"
     return "ddp"

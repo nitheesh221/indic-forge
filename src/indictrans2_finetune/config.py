@@ -12,7 +12,14 @@ from indictrans2_finetune.langs import direction_for, normalize_lang
 from indictrans2_finetune.methods import TRAIN_METHODS, validate_train_method
 
 TRAIN_MODES = ("full", "full_lora", "lora", "qlora")
-DISTRIBUTIONS = ("auto", "ddp", "fsdp", "deepspeed")
+DISTRIBUTIONS = ("auto", "ddp", "zero2", "zero3", "offload", "fsdp", "deepspeed")
+DEEPSPEED_DISTRIBUTIONS = ("zero2", "zero3", "offload", "deepspeed")
+_DS_CONFIG_FILES = {
+    "zero2": "ds_zero2.json",
+    "zero3": "ds_zero3.json",
+    "offload": "ds_offload.json",
+    "deepspeed": "ds_zero2.json",
+}
 HF_MODEL_IDS = (
     "ai4bharat/indictrans2-en-indic-dist-200M",
     "ai4bharat/indictrans2-en-indic-1B",
@@ -26,9 +33,16 @@ BEST_METRICS = ("eval_loss", "eval_entropy", "eval_mean_token_accuracy")
 HIGHER_IS_BETTER = {"eval_mean_token_accuracy"}
 LORA_TARGETS = "q_proj,k_proj"
 FULL_LORA_TARGETS = "q_proj,k_proj,v_proj,out_proj,fc1,fc2"
-_PACKAGE_DS = Path(__file__).resolve().parent / "configs" / "ds_zero2.json"
-_REPO_DS = Path(__file__).resolve().parents[2] / "configs" / "ds_zero2.json"
-DEFAULT_DS_ZERO2 = str(_PACKAGE_DS if _PACKAGE_DS.is_file() else _REPO_DS)
+
+
+def deepspeed_config(filename: str) -> str:
+    """Resolve a shipped DeepSpeed JSON from the package, then the repo."""
+    package = Path(__file__).resolve().parent / "configs" / filename
+    repo = Path(__file__).resolve().parents[2] / "configs" / filename
+    path = package if package.is_file() else repo
+    if not path.is_file():
+        raise SystemExit(f"DeepSpeed config not found: {filename}")
+    return str(path)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -154,21 +168,27 @@ def build_parser() -> argparse.ArgumentParser:
         choices=DISTRIBUTIONS,
         default="auto",
         help=(
-            "auto: 1 GPU in-process, multi-GPU DDP. "
-            "ddp: multi-GPU DistributedDataParallel. "
-            "fsdp: Fully Sharded Data Parallel (best for full 1B). "
-            "deepspeed: ZeRO via --deepspeed config."
+            "How GPUs are used. auto (default): 1 GPU single process, 2+ GPUs DDP. "
+            "ddp: same multi-GPU speed path. "
+            "zero2: DeepSpeed ZeRO-2 for a full 1B run whose optimizer does not fit. "
+            "zero3: ZeRO-3 when the weights themselves do not fit. "
+            "offload: slow CPU offload, last resort. "
+            "fsdp: advanced, not the normal choice. "
+            "deepspeed: old name for zero2. See docs/distribution.md."
         ),
     )
     parser.add_argument(
         "--deepspeed",
         default=None,
-        help="Path to a DeepSpeed JSON config. Defaults to configs/ds_zero2.json when --distribution deepspeed.",
+        help=(
+            "Optional DeepSpeed JSON. zero2, zero3, offload, and deepspeed "
+            "already pick a shipped config. Pass this only to replace that file."
+        ),
     )
     parser.add_argument(
         "--fsdp",
         default="full_shard auto_wrap",
-        help="FSDP strategy string passed to TrainingArguments when --distribution fsdp.",
+        help="FSDP strategy string used only when --distribution fsdp.",
     )
     parser.add_argument("--gpu_ids", default=None)
     parser.add_argument("--num_workers", type=int, default=4)
@@ -232,11 +252,13 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
     args.keep_checkpoints = retention_count(args.top_n_checkpoints, args.last_k_checkpoints, limit)
     args.greater_is_better = args.metric_for_best_model in HIGHER_IS_BETTER
     _resolve_distribution(args)
-    if args.gpu_ids:
+    distributed = os.environ.get("RANK") is not None or os.environ.get("LOCAL_RANK") is not None
+    if args.gpu_ids and not distributed:
         args.visible_gpu_count = len(
             [item.strip() for item in args.gpu_ids.split(",") if item.strip()]
         )
-    elif os.environ.get("RANK") is not None or os.environ.get("LOCAL_RANK") is not None:
+    elif distributed or args.distribution == "auto":
+        # auto on one process must not fall into DataParallel across every visible GPU.
         args.visible_gpu_count = 1
     else:
         args.visible_gpu_count = None
@@ -246,31 +268,71 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
 def _resolve_distribution(args: argparse.Namespace) -> None:
     strategy = args.distribution
     if strategy == "deepspeed":
+        print(
+            "Note: --distribution deepspeed is the old name for zero2.",
+            file=sys.stderr,
+        )
+        args.distribution = "zero2"
+        strategy = "zero2"
+    if args.deepspeed and strategy == "auto":
+        print(
+            "Note: a --deepspeed config switches this run to zero2. "
+            "Pass --distribution zero3 or offload to use those configs instead.",
+            file=sys.stderr,
+        )
+        args.distribution = "zero2"
+        strategy = "zero2"
+    elif args.deepspeed and strategy not in DEEPSPEED_DISTRIBUTIONS and strategy != "zero2":
+        raise SystemExit("--deepspeed is only used with --distribution zero2, zero3, or offload.")
+    if strategy in {"zero2", "zero3", "offload"}:
         if args.train_mode == "qlora":
-            raise SystemExit("QLoRA with DeepSpeed is not supported here. Use --distribution ddp or auto.")
+            raise SystemExit(
+                "QLoRA does not run with ZeRO or CPU offload. "
+                "Use --distribution auto or ddp. 4-bit weights stay on one device per GPU."
+            )
         if not args.deepspeed:
-            if not Path(DEFAULT_DS_ZERO2).is_file():
-                raise SystemExit(
-                    "--distribution deepspeed needs --deepspeed path/to/ds_config.json "
-                    f"(default missing: {DEFAULT_DS_ZERO2})."
-                )
-            args.deepspeed = DEFAULT_DS_ZERO2
+            args.deepspeed = deepspeed_config(_DS_CONFIG_FILES[strategy])
         elif not Path(args.deepspeed).is_file():
             raise SystemExit(f"DeepSpeed config not found: {args.deepspeed}")
-    elif args.deepspeed:
-        # Explicit config implies DeepSpeed even if distribution was left on auto.
-        if strategy == "auto":
-            args.distribution = "deepspeed"
-            strategy = "deepspeed"
-        elif strategy != "deepspeed":
-            raise SystemExit("--deepspeed requires --distribution deepspeed (or auto).")
-    if strategy == "fsdp":
-        if args.train_mode == "qlora":
-            raise SystemExit("QLoRA with FSDP is not supported here. Use --distribution ddp or auto.")
         if args.train_mode in {"lora", "full_lora"}:
             print(
-                "Warning: FSDP + PEFT LoRA can be fragile. Prefer --distribution ddp for LoRA; "
-                "use fsdp mainly for --train_mode full.",
+                "Warning: LoRA already fits on one IndicTrans2 GPU. "
+                f"--distribution {strategy} is for a full 1B run that is out of memory. "
+                "Prefer --distribution auto or ddp.",
+                file=sys.stderr,
+            )
+        elif strategy == "zero2":
+            print(
+                "Note: zero2 splits the Adam optimizer across GPUs. "
+                "On one GPU, try --gradient_checkpointing and --optim adamw_bnb_8bit first.",
+                file=sys.stderr,
+            )
+        elif strategy == "zero3":
+            print(
+                "Note: zero3 is for when the model weights themselves do not fit. "
+                "If only the Adam optimizer is too big, use --distribution zero2.",
+                file=sys.stderr,
+            )
+        elif strategy == "offload":
+            print(
+                "Note: offload keeps weights and optimizer in CPU memory. It is the slow last resort.",
+                file=sys.stderr,
+            )
+    if strategy == "fsdp":
+        if args.train_mode == "qlora":
+            raise SystemExit(
+                "QLoRA does not run with FSDP. Use --distribution auto or ddp."
+            )
+        if args.train_mode in {"lora", "full_lora"}:
+            print(
+                "Warning: FSDP with LoRA is fragile here. Prefer --distribution ddp. "
+                "For a full 1B run that is out of memory, prefer --distribution zero2.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Note: FSDP is not the usual multi-GPU choice. DDP is faster when the model fits. "
+                "zero2 is the memory option for a full 1B run.",
                 file=sys.stderr,
             )
     if strategy == "ddp" and args.gpu_ids:
@@ -311,24 +373,27 @@ def pin_visible_gpus(argv: list[str] | None = None) -> list[str] | None:
 
 
 def maybe_relaunch(argv: list[str] | None = None) -> None:
-    """One GPU stays in-process. Several --gpu_ids relaunch under torchrun without --gpu_ids."""
+    """Relaunch under torchrun when the chosen distribution needs it.
+
+    ``auto`` and ``ddp`` stay in-process on one GPU and relaunch only for two
+    or more ``--gpu_ids``. ZeRO and CPU offload relaunch even for one GPU,
+    because DeepSpeed expects that launcher.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     known, _unknown = parser.parse_known_args(argv)
     distributed = os.environ.get("RANK") is not None or os.environ.get("LOCAL_RANK") is not None
     if distributed and known.gpu_ids:
         raise SystemExit("Do not pass --gpu_ids when launching with torchrun.")
-    if distributed or not known.gpu_ids:
+    if distributed:
         return
-    ids = pin_visible_gpus(argv)
-    if ids is None:
-        return
-    # FSDP / DeepSpeed / explicit DDP with 2+ GPUs always relaunch.
-    needs_launch = len(ids) > 1 or known.distribution in {"ddp", "fsdp", "deepspeed"}
+    ids = pin_visible_gpus(argv) if known.gpu_ids else None
+    nproc = len(ids) if ids else 1
+    strategy = known.distribution
+    needs_launch = strategy in DEEPSPEED_DISTRIBUTIONS or (
+        strategy in {"auto", "ddp", "fsdp"} and nproc > 1
+    )
     if not needs_launch:
-        return
-    if len(ids) == 1 and known.distribution in {"ddp", "fsdp", "deepspeed"}:
-        # Single visible GPU: stay in-process; HF still gets the strategy flags.
         return
     cleaned = _strip_gpu_ids(argv)
     cmd = [
@@ -336,7 +401,7 @@ def maybe_relaunch(argv: list[str] | None = None) -> None:
         "-m",
         "torch.distributed.run",
         "--nproc_per_node",
-        str(len(ids)),
+        str(nproc),
         str(Path(sys.argv[0]).resolve()),
         *cleaned,
     ]

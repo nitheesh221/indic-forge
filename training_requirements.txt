@@ -15,7 +15,9 @@
 # PPO / GRPO / DPO / KTO are not training options. See docs/why-sft.md.
 
 # Training method: --train_method sft only. label_smoothing_factor default 0.1.
-# DeepSpeed / FSDP: supported via --distribution deepspeed|fsdp (not for QLoRA).
+# Distribution: --distribution auto (default) | ddp | zero2 | zero3 | offload.
+#   fsdp is advanced. deepspeed is the old name for zero2.
+#   QLoRA allows only auto and ddp. See docs/distribution.md.
 # --write_rca / --no-write_rca  default: write rca_report.html after train.
 
 # =============================================================================
@@ -27,7 +29,8 @@
 # CUDA: required for real training (CPU allowed only for data/tests and slow inference)
 # BitsAndBytes: required for train_mode=qlora
 # setuptools>=69,<81: required so COMET can import pkg_resources
-# DeepSpeed: SKIPPED
+# DeepSpeed: not installed by default. Required only for
+#   --distribution zero2, zero3, or offload (`pip install deepspeed`).
 
 python_requires = >=3.10
 
@@ -313,12 +316,22 @@ pytest>=8.0.0
 # --num_workers              default: 4
 # --gradient_checkpointing   flag, default: false
 # --bf16 / --fp16            mutually exclusive flags
-# --distribution   choices: auto | ddp | fsdp | deepspeed   default: auto
-# --deepspeed      path to JSON; defaults to configs/ds_zero2.json when
-#                  --distribution deepspeed
-# --fsdp           default: "full_shard auto_wrap" (used when distribution=fsdp)
-# QLoRA rejects fsdp and deepspeed.
-# Prefer ddp for LoRA/QLoRA; fsdp/deepspeed for full 1B memory pressure.
+# --distribution   choices: auto | ddp | zero2 | zero3 | offload | fsdp | deepspeed
+#                  default: auto
+#   auto      1 GPU single process; 2+ --gpu_ids relaunch as DDP
+#   ddp       explicit multi-GPU speed path (same as auto with 2+ GPUs)
+#   zero2     DeepSpeed ZeRO-2, configs/ds_zero2.json
+#             full 1B after checkpointing + 8-bit Adam still OOM
+#   zero3     DeepSpeed ZeRO-3, configs/ds_zero3.json
+#             only when the weights themselves do not fit
+#   offload   ZeRO-3 with CPU offload, configs/ds_offload.json
+#             slow last resort. Edit device to nvme for disk offload.
+#   fsdp      advanced, not the normal choice
+#   deepspeed old name; resolved to zero2
+# --deepspeed      optional JSON that replaces the shipped config
+# --fsdp           default: "full_shard auto_wrap" (only when distribution=fsdp)
+# QLoRA allows only auto and ddp.
+# Guide: docs/distribution.md
 
 # Small-GPU full FT (no ZeRO): --gpu_ids 0, --optim adamw_bnb_8bit,
 #   --batch_size 1 --gradient_accumulation_steps 8 --gradient_checkpointing
