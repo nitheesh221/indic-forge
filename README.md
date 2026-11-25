@@ -36,7 +36,8 @@ Training writes `rca_report.html` unless you pass `--no-write_rca`.
 - `--last_k_checkpoints` (default `2`): also keep the most recent saves. This is Last-N. There is no second flag.
 - A checkpoint in both lists is stored once. `checkpoint_manifest.json` marks `in_top_k` and `in_last_k`.
 - With the default epoch eval and epoch save, `final_model` is the **best** model, not the last one.
-- Translation metrics are logged for the report and never choose a checkpoint.
+- `--early_stopping_patience` (default `3`) stops training after that many evaluations with no improvement on the same metric. `0` turns it off. A 2-epoch run does not stop early, because the first evaluation only sets the baseline.
+- Translation metrics are logged for the report and never choose a checkpoint, and they never trigger early stopping.
 
 The full explanation, including when `final_model` becomes the last model and how to load a Last-N checkpoint, is [docs/checkpoints.md](docs/checkpoints.md).
 

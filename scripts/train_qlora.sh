@@ -47,6 +47,8 @@ ARGS=(
   --save_steps "${SAVE_STEPS:-500}"
   --save_total_limit "${SAVE_TOTAL_LIMIT:-0}"
   --metric_for_best_model "${METRIC_FOR_BEST_MODEL:-eval_loss}"
+  --early_stopping_patience "${EARLY_STOPPING_PATIENCE:-3}"
+  --early_stopping_threshold "${EARLY_STOPPING_THRESHOLD:-0.0}"
   --top_n_checkpoints "${TOP_N_CHECKPOINTS:-3}"
   --last_k_checkpoints "${LAST_K_CHECKPOINTS:-2}"
   --label_smoothing_factor "${LABEL_SMOOTHING_FACTOR:-0.1}"

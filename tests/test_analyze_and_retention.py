@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from indictrans2_finetune.analyze import analyze_run, _token_edit_rate
-from indictrans2_finetune.callbacks import CheckpointRetentionCallback, retention_count
+from indictrans2_finetune.callbacks import (
+    CheckpointRetentionCallback,
+    EarlyStoppingCallback,
+    advance_early_stopping,
+    retention_count,
+)
 from indictrans2_finetune.config import parse_args
 from indictrans2_finetune.methods import recommend_distribution
 
@@ -37,10 +42,79 @@ def test_sft_defaults_have_no_method_flag():
     args = _args()
     assert not hasattr(args, "train_method")
     assert args.label_smoothing_factor == 0.1
+    assert args.early_stopping_patience == 3
+    assert args.early_stopping_threshold == 0.0
     assert args.top_n_checkpoints == 3
     assert args.last_k_checkpoints == 2
     assert args.distribution == "auto"
     assert args.keep_checkpoints == 5
+
+
+def test_early_stopping_rejects_a_run_that_cannot_reload_the_best():
+    with pytest.raises(SystemExit, match="0 or higher"):
+        _args(early_stopping_patience=-1)
+    with pytest.raises(SystemExit, match="evaluation or saving is off"):
+        _args(early_stopping_patience=2, eval_strategy="no")
+    with pytest.raises(SystemExit, match="to match"):
+        _args(early_stopping_patience=2, eval_strategy="steps", save_strategy="epoch")
+    off = _args(early_stopping_patience=0, eval_strategy="steps", save_strategy="epoch")
+    assert off.early_stopping_patience == 0
+
+
+def test_early_stopping_counts_misses_and_respects_direction():
+    best, counter, stop, _message = advance_early_stopping(
+        None, 0, 1.5, greater_is_better=False, patience=2, threshold=0.0, metric="eval_loss", step=10,
+    )
+    assert (best, counter, stop) == (1.5, 0, False)
+    best, counter, stop, _message = advance_early_stopping(
+        best, counter, 1.4, greater_is_better=False, patience=2, threshold=0.0, metric="eval_loss", step=20,
+    )
+    assert (best, counter, stop) == (1.4, 0, False)
+    best, counter, stop, _message = advance_early_stopping(
+        best, counter, 1.45, greater_is_better=False, patience=2, threshold=0.0, metric="eval_loss", step=30,
+    )
+    assert (best, counter, stop) == (1.4, 1, False)
+    best, counter, stop, message = advance_early_stopping(
+        best, counter, 1.5, greater_is_better=False, patience=2, threshold=0.0, metric="eval_loss", step=40,
+    )
+    assert (best, counter, stop) == (1.4, 2, True)
+    assert "step 40" in message
+
+    # A change smaller than the threshold is not an improvement.
+    best, counter, stop, _message = advance_early_stopping(
+        1.0, 1, 0.995, greater_is_better=False, patience=3, threshold=0.01, metric="eval_loss", step=5,
+    )
+    assert (best, counter, stop) == (1.0, 2, False)
+    best, counter, stop, _message = advance_early_stopping(
+        0.40, 2, 0.42, greater_is_better=True, patience=3, threshold=0.0, metric="eval_mean_token_accuracy", step=6,
+    )
+    assert (best, counter, stop) == (0.42, 0, False)
+
+
+class _StopState:
+    def __init__(self, step: int, best_metric):
+        self.global_step = step
+        self.best_metric = best_metric
+
+
+class _StopControl:
+    def __init__(self):
+        self.should_training_stop = False
+
+
+def test_early_stopping_callback_stops_and_keeps_a_restored_best():
+    callback = EarlyStoppingCallback("eval_loss", greater_is_better=False, patience=1, threshold=0.0)
+    control = _StopControl()
+    callback.on_evaluate(None, _StopState(4, best_metric=1.0), control, metrics={"eval_loss": 1.2})
+    assert control.should_training_stop
+    assert callback.best == 1.0
+    assert callback.counter == 1
+
+    fresh = EarlyStoppingCallback("eval_loss", greater_is_better=False, patience=2, threshold=0.0)
+    control = _StopControl()
+    fresh.on_evaluate(None, _StopState(1, best_metric=None), control, metrics={})
+    assert not control.should_training_stop
+    assert fresh.counter == 0
 
 
 def test_recommend_distribution():

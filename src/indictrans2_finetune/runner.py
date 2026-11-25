@@ -19,6 +19,7 @@ from transformers import (
 from indictrans2_finetune.callbacks import (
     CheckpointRetentionCallback,
     CsvLogCallback,
+    EarlyStoppingCallback,
     TranslationMetricsCallback,
     barrier,
     resolve_log_path,
@@ -85,6 +86,15 @@ def run(args) -> Path:
             save_total_limit=limit,
         ),
     ]
+    if args.early_stopping_patience > 0:
+        callbacks.append(
+            EarlyStoppingCallback(
+                args.metric_for_best_model,
+                args.greater_is_better,
+                patience=args.early_stopping_patience,
+                threshold=args.early_stopping_threshold,
+            )
+        )
     if args.eval_strategy != "no":
         callbacks.append(
             TranslationMetricsCallback(
@@ -112,11 +122,16 @@ def run(args) -> Path:
         trainer_kwargs["tokenizer"] = tokenizer
     trainer = Seq2SeqTrainer(**trainer_kwargs)
     trainer_box["model"] = trainer.model
+    if args.early_stopping_patience > 0:
+        early_stop = f"{args.metric_for_best_model}/patience{args.early_stopping_patience}"
+    else:
+        early_stop = "off"
     print(
         f" | > mode={args.train_mode} "
         f"distribution={args.distribution} model={args.model_id} "
         f"train={len(train_dataset)} dev={len(eval_dataset)} "
-        f"checkpoints=top{args.top_n_checkpoints}+last{args.last_k_checkpoints}"
+        f"checkpoints=top{args.top_n_checkpoints}+last{args.last_k_checkpoints} "
+        f"early_stop={early_stop}"
     )
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     final_dir = _save_final(trainer, tokenizer, args)
@@ -137,6 +152,11 @@ def run(args) -> Path:
             "last_k_checkpoints": args.last_k_checkpoints,
             "metric_for_best_model": args.metric_for_best_model,
             "eval_metrics": args.eval_metrics,
+            "early_stopping_patience": args.early_stopping_patience,
+            "early_stopping_threshold": args.early_stopping_threshold,
+            "stopped_early": bool(
+                args.early_stopping_patience > 0 and state.global_step < state.max_steps
+            ),
             "best_model_checkpoint": state.best_model_checkpoint,
             "best_metric": _jsonable(state.best_metric),
             "epochs_completed": _jsonable(state.epoch),

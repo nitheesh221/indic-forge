@@ -141,6 +141,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="Also keep the Last-K most recent checkpoints (union with Top-K).",
     )
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=3,
+        help=(
+            "Stop after this many evaluations with no improvement on "
+            "--metric_for_best_model. 0 turns early stopping off. "
+            "The count is evaluations, not epochs."
+        ),
+    )
+    parser.add_argument(
+        "--early_stopping_threshold",
+        type=float,
+        default=0.0,
+        help=(
+            "Smallest improvement that resets the patience count. "
+            "0.0 means any strict improvement counts."
+        ),
+    )
 
     parser.add_argument("--eval_metrics", nargs="+", choices=EVAL_METRICS, default=list(EVAL_METRICS))
     parser.add_argument("--eval_metrics_csv", default="eval_metrics.csv")
@@ -226,6 +245,21 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--label_smoothing_factor must be in [0, 1).")
     if args.ddp_timeout < 1:
         raise SystemExit("--ddp_timeout must be a positive number of seconds.")
+    if args.early_stopping_patience < 0:
+        raise SystemExit("--early_stopping_patience must be 0 or higher. 0 turns early stopping off.")
+    if args.early_stopping_threshold < 0:
+        raise SystemExit("--early_stopping_threshold must be 0 or higher.")
+    if args.early_stopping_patience > 0:
+        if args.eval_strategy == "no" or args.save_strategy == "no":
+            raise SystemExit(
+                "--early_stopping_patience needs --eval_strategy and --save_strategy "
+                "to be epoch or steps. Early stopping cannot run when evaluation or saving is off."
+            )
+        if args.eval_strategy != args.save_strategy:
+            raise SystemExit(
+                "--early_stopping_patience needs --eval_strategy and --save_strategy to match "
+                "so the best checkpoint is reloaded into final_model."
+            )
     if args.learning_rate is None:
         args.learning_rate = 2e-4 if args.train_mode in {"lora", "qlora"} else 2e-5
     if args.optim is None:

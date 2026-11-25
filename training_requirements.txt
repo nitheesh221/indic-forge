@@ -252,6 +252,13 @@ pytest>=8.0.0
 #   default: eval_loss
 #   lower-is-better: eval_loss, eval_entropy
 #   higher-is-better: eval_mean_token_accuracy
+# --early_stopping_patience    default: 3
+#   Stop after this many evaluations with no improvement. 0 turns it off.
+#   The first evaluation only sets the baseline. Counts evaluations, not epochs.
+# --early_stopping_threshold   default: 0.0
+#   Smallest improvement that resets the patience count.
+# Requires eval_strategy == save_strategy, and neither may be "no".
+# Translation metrics never trigger the stop.
 
 # =============================================================================
 # 7. TOP-K + LAST-K CHECKPOINTS

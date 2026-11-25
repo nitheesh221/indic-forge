@@ -234,6 +234,132 @@ class TopNCheckpointCallback(CheckpointRetentionCallback):
         )
 
 
+def advance_early_stopping(
+    best: float | None,
+    counter: int,
+    value: float,
+    *,
+    greater_is_better: bool,
+    patience: int,
+    threshold: float,
+    metric: str,
+    step: int,
+) -> tuple[float, int, bool, str]:
+    """Compare one evaluation with the best score so far.
+
+    ``patience`` counts evaluations that failed to improve, not epochs.
+    The first score only sets the baseline. An improvement has to beat the
+    best score by more than ``threshold``.
+    """
+    value = float(value)
+    if best is None:
+        return (
+            value,
+            0,
+            False,
+            f" | > {metric} {value:.6g} is the first score. "
+            f"Early stopping waits for {patience} evaluations with no improvement.",
+        )
+    gain = (value - best) if greater_is_better else (best - value)
+    if gain > threshold:
+        return value, 0, False, f" | > {metric} {value:.6g} improved on {best:.6g}."
+    counter += 1
+    if counter >= patience:
+        return (
+            best,
+            counter,
+            True,
+            f" | > Early stopping at step {step}: {metric} did not improve for "
+            f"{counter} evaluations (best {best:.6g}). "
+            "The best checkpoint is reloaded for final_model.",
+        )
+    return (
+        best,
+        counter,
+        False,
+        f" | > {metric} {value:.6g} did not improve on {best:.6g} ({counter}/{patience}).",
+    )
+
+
+def _sync_early_stop(
+    best: float | None, counter: int, stop: bool
+) -> tuple[float | None, int, bool]:
+    """Copy rank 0's decision to every rank so the training loop stays in step."""
+    rank, world = distributed_rank_and_world()
+    if world == 1:
+        return best, counter, stop
+    backend = dist.get_backend()
+    device = torch.device("cuda", torch.cuda.current_device()) if backend == "nccl" else torch.device("cpu")
+    if rank == 0:
+        packed = torch.tensor(
+            [
+                0.0 if best is None else 1.0,
+                0.0 if best is None else float(best),
+                float(counter),
+                1.0 if stop else 0.0,
+            ],
+            dtype=torch.float64,
+            device=device,
+        )
+    else:
+        packed = torch.zeros(4, dtype=torch.float64, device=device)
+    dist.broadcast(packed, src=0)
+    has_best = float(packed[0].item()) > 0.5
+    best_out = float(packed[1].item()) if has_best else None
+    return best_out, int(round(float(packed[2].item()))), float(packed[3].item()) > 0.5
+
+
+class EarlyStoppingCallback(TrainerCallback):
+    """Stop after ``patience`` evaluations that do not beat the best score.
+
+    The score is ``--metric_for_best_model``. chrF++ and the other translation
+    scores are not used: they are computed later, and they do not choose
+    ``final_model``. Rank 0 makes the decision and every other rank follows it.
+    """
+
+    def __init__(self, metric: str, greater_is_better: bool, patience: int, threshold: float):
+        self.metric = metric
+        self.greater_is_better = greater_is_better
+        self.patience = patience
+        self.threshold = threshold
+        self.best: float | None = None
+        self.counter = 0
+        self._seeded = False
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        rank, _world = distributed_rank_and_world()
+        stop = False
+        message = None
+        if rank == 0:
+            if not self._seeded:
+                self._seeded = True
+                restored = getattr(state, "best_metric", None)
+                if self.best is None and restored is not None:
+                    self.best = float(restored)
+            value = None if not metrics else metrics.get(self.metric)
+            if value is None:
+                message = (
+                    f" | > Early stopping skipped this evaluation: {self.metric} was missing."
+                )
+            else:
+                self.best, self.counter, stop, message = advance_early_stopping(
+                    self.best,
+                    self.counter,
+                    value,
+                    greater_is_better=self.greater_is_better,
+                    patience=self.patience,
+                    threshold=self.threshold,
+                    metric=self.metric,
+                    step=state.global_step,
+                )
+        self.best, self.counter, stop = _sync_early_stop(self.best, self.counter, stop)
+        if rank == 0 and message:
+            print(message)
+        if stop:
+            control.should_training_stop = True
+        return control
+
+
 class TranslationMetricsCallback(TrainerCallback):
     def __init__(
         self,

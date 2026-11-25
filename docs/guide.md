@@ -200,6 +200,8 @@ Two lists are kept, and a folder that is on both lists is stored once.
 
 `checkpoint_manifest.json` records which folder is in which list. With eval and save both set to `epoch`, the weights in memory at the end are the best validation loss, and those weights are what `final_model` saves. The last epoch remains on disk as a `checkpoint-<step>` folder.
 
+Early stopping uses that same score. `--early_stopping_patience` defaults to `3`, which means three evaluations in a row with no improvement. The first evaluation only records the starting score, so a 2-epoch run still finishes both epochs. Set `--epochs` higher than the patience when you want a long run to be able to stop. `--early_stopping_patience 0` turns it off. `--early_stopping_threshold` is how much the score must move to count as an improvement; `0.0` means any strict improvement resets the count. The patience counts evaluations, so with `--eval_strategy steps` it is not the same as three epochs. chrF++ does not stop the run. On more than one GPU, rank 0 decides and the other ranks stop with it. After the stop, the best checkpoint is still what `final_model` saves. Resuming a run keeps the previous best score and starts the stall count again from zero.
+
 `finetune_meta.json` next to `final_model` records `best_model_checkpoint`, `best_metric`, and `epochs_completed`.
 
 `--save_total_limit 0` means no extra cap. A positive number trims the union down to that many folders, best scores first.

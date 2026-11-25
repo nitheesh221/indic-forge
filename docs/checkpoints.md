@@ -75,6 +75,18 @@ That reload is **on** when all of these are true:
 
 Both strategies default to `epoch`, so a normal run reloads the best checkpoint, then saves it as `final_model`.
 
+## Early stopping
+
+`--early_stopping_patience` (default `3`) stops the run after that many evaluations fail to improve `--metric_for_best_model`. The first evaluation sets the baseline and does not count as a miss. `--early_stopping_patience 0` leaves the run going for the full `--epochs`.
+
+Patience counts evaluations. With the default `--eval_strategy epoch`, three means three epochs without a better score. With `--eval_strategy steps`, three means three evaluation calls, which can fall inside one epoch.
+
+`--early_stopping_threshold` (default `0.0`) is the smallest change that counts as an improvement. For `eval_loss`, the loss has to fall by more than this amount. For `eval_mean_token_accuracy`, the accuracy has to rise by more than this amount.
+
+The stop uses the same metric as the best-checkpoint choice. chrF++, COMET, BLEU, BERTScore, METEOR, TER, and exact match do not stop training. Evaluation and saving must stay on the same schedule (`epoch`/`epoch` or `steps`/`steps`), because the reload of the best checkpoint depends on that. A run that stops early still writes `final_model` from the best checkpoint, and `finetune_meta.json` sets `stopped_early` to true.
+
+On more than one GPU, rank 0 reads the score and the other ranks stop on that same decision. Resuming from a checkpoint keeps the previous best score and starts the stall count from zero.
+
 **Normal run:** `final_model` is the best model (lowest `eval_loss`, unless you changed the metric). It can be an earlier epoch. The last epoch is still on disk as the newest `checkpoint-<step>` folder, because Last-N kept it.
 
 **Reload turned off:** set `--eval_strategy` and `--save_strategy` to different values, or set `--eval_strategy no`. Then nothing is reloaded. `final_model` is the last model, the weights from the final training step.
