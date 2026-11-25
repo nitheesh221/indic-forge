@@ -94,8 +94,10 @@ python train.py \
 If that still runs out of memory, then:
 
 ```bash
-python train.py --gpu_ids 0,1 --distribution zero2 --train_mode full ...
+SAVE_ONLY_MODEL=0 DISTRIBUTION=zero2 GPU_IDS=0,1 bash scripts/train_full.sh
 ```
+
+`scripts/train_full.sh` turns on `--save_only_model` unless you set `SAVE_ONLY_MODEL=0`. ZeRO and FSDP refuse to start when that flag is combined with reloading the best checkpoint, which this repo does by default. `SAVE_ONLY_MODEL=0` keeps the optimizer in the checkpoint so ZeRO can reload the best weights and so a stopped run can resume. Those checkpoints are large.
 
 ZeRO-2 can also run on a single GPU (`--gpu_ids 0`). It still needs the DeepSpeed launcher, which this repo starts for you. On one GPU the optimizer is not split across cards, so two GPUs are the useful case.
 

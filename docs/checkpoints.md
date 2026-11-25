@@ -21,7 +21,7 @@ it2_out/lora/checkpoint-150/
 
 The number is the training step. Each folder can resume a run (`--resume_from_checkpoint`) and also holds the weights from that moment.
 
-Two rules decide which of those folders stay. The rest are deleted.
+Two rules decide which of those folders stay. The rest are deleted. On more than one GPU, every rank waits until the checkpoint write has finished, and only rank 0 deletes.
 
 ### Top-N: the best scores
 

@@ -1,6 +1,6 @@
 # Reading the training report
 
-Training writes `rca_report.html` in the output directory. Rebuild it any time with:
+Training writes `rca_report.html` in the output directory when `--write_rca` is on (the default). On more than one GPU, only rank 0 writes the file. The other rank waits until that write finishes. Set `WRITE_RCA=0` with the shell scripts, or pass `--no-write_rca`, when you want training to exit first and build the report afterwards. Rebuild it any time with:
 
 ```bash
 indictrans2-ft analyze --run-dir it2_out/lora
