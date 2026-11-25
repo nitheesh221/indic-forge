@@ -1,9 +1,9 @@
 """Offline RCA report from a training run directory.
 
 Reads training_logs.csv, eval_metrics.csv, eval_samples.csv, and
-checkpoint_manifest.json, then writes a self-contained HTML dashboard for
-root-cause analysis: loss curves, MT metric trends, per-language breakdown,
-worst hypotheses, and checkpoint retention.
+checkpoint_manifest.json, then writes one HTML file. Charts are inline SVG,
+so the page works with no network. Each metric has its own chart. Findings
+name the best step and the last step, not only the first and the last.
 """
 
 from __future__ import annotations
@@ -16,6 +16,37 @@ import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+# Metrics already stored on a 0–100-ish scale. Each one is charted alone
+# because a shared axis hides the small ones, and TER moves the other way.
+_HIGHER_IS_BETTER = {
+    "chrf2pp": True,
+    "comet": True,
+    "bleu": True,
+    "bertscore": True,
+    "meteor": True,
+    "ter": False,
+    "exact_match": True,
+    "eval_loss": False,
+    "eval_entropy": False,
+    "eval_mean_token_accuracy": True,
+    "loss": False,
+    "learning_rate": True,
+}
+_METRIC_LABELS = {
+    "loss": "Train loss",
+    "eval_loss": "Validation loss",
+    "learning_rate": "Learning rate",
+    "eval_entropy": "Validation entropy",
+    "eval_mean_token_accuracy": "Validation token accuracy",
+    "chrf2pp": "chrF++",
+    "comet": "COMET",
+    "bleu": "BLEU",
+    "bertscore": "BERTScore",
+    "meteor": "METEOR",
+    "ter": "TER",
+    "exact_match": "Exact match",
+}
 
 
 def analyze_run(
@@ -34,23 +65,16 @@ def analyze_run(
     meta = _find_meta(run_dir)
 
     findings = _build_findings(logs, metrics, samples, manifest)
+    recommendation = _recommendation(logs, metrics, manifest)
     per_lang = _per_language_stats(samples, latest_step_only=latest_step_only)
-    worst = _worst_examples(samples, worst_n=worst_n, latest_step_only=latest_step_only)
-    charts = {
-        "loss": _series(logs, "step", ["loss", "eval_loss"]),
-        "token": _series(logs, "step", ["eval_entropy", "eval_mean_token_accuracy"]),
-        "mt": _series(
-            metrics,
-            "step",
-            ["chrf2pp", "comet", "bleu", "bertscore", "meteor", "ter", "exact_match"],
-        ),
-        "lr": _series(logs, "step", ["learning_rate"]),
-    }
+    worst = _worst_examples(samples, worst_n=worst_n)
+    charts = _chart_blocks(logs, metrics)
     output_html = output_html or (run_dir / "rca_report.html")
     output_html.write_text(
         _render_html(
             run_dir=run_dir,
             meta=meta,
+            recommendation=recommendation,
             findings=findings,
             charts=charts,
             per_lang=per_lang,
@@ -74,6 +98,63 @@ def _find_meta(run_dir: Path) -> dict[str, Any]:
     return {}
 
 
+def _best_point(points: list[tuple[float, float]], higher_is_better: bool) -> tuple[float, float] | None:
+    if not points:
+        return None
+    return max(points, key=lambda item: item[1]) if higher_is_better else min(points, key=lambda item: item[1])
+
+
+def _recommendation(logs: list[dict], metrics: list[dict], manifest: dict | None) -> str:
+    eval_loss = _numeric_col(logs, "eval_loss")
+    best = _best_point(eval_loss, higher_is_better=False)
+    if best is None:
+        return (
+            "No validation loss was logged. final_model is the weights from the "
+            "last training step. Turn evaluation on to pick the best checkpoint."
+        )
+    best_step, best_value = best
+    last_step, last_value = eval_loss[-1]
+    manifest_note = _manifest_best_note(manifest)
+    if abs(best_step - last_step) < 1e-9:
+        text = (
+            f"The best validation loss is {best_value:.4f} at step { _step(best_step) }, "
+            "which is also the last eval. final_model matches the last checkpoint "
+            "when eval and save use the same schedule."
+        )
+    else:
+        text = (
+            f"The best validation loss is {best_value:.4f} at step { _step(best_step) }. "
+            f"The last eval is {last_value:.4f} at step { _step(last_step) }. "
+            "On a normal run, final_model is the best step, not the last one. "
+            "The last weights stay in the newest checkpoint folder."
+        )
+    if manifest_note:
+        text = f"{text} {manifest_note}"
+    chrf = _numeric_col(metrics, "chrf2pp")
+    best_chrf = _best_point(chrf, higher_is_better=True)
+    if best_chrf is not None and abs(best_chrf[0] - chrf[-1][0]) >= 1e-9:
+        text += (
+            f" chrF++ is highest at step { _step(best_chrf[0]) } "
+            f"({best_chrf[1]:.2f}), not at the last step ({chrf[-1][1]:.2f}). "
+            "chrF++ does not choose the saved checkpoint."
+        )
+    return text
+
+
+def _manifest_best_note(manifest: dict | None) -> str:
+    if not manifest or not manifest.get("checkpoints"):
+        return ""
+    scored = [row for row in manifest["checkpoints"] if row.get("score") is not None]
+    if not scored:
+        return ""
+    higher = bool(manifest.get("greater_is_better"))
+    best = max(scored, key=lambda row: float(row["score"])) if higher else min(
+        scored, key=lambda row: float(row["score"])
+    )
+    name = Path(str(best.get("path", ""))).name
+    return f"Manifest best checkpoint: {name} (score {best.get('score')})."
+
+
 def _build_findings(
     logs: list[dict],
     metrics: list[dict],
@@ -83,43 +164,53 @@ def _build_findings(
     findings: list[dict[str, str]] = []
     train_loss = _numeric_col(logs, "loss")
     eval_loss = _numeric_col(logs, "eval_loss")
-    if len(train_loss) >= 2 and len(eval_loss) >= 2:
-        train_delta = train_loss[-1][1] - train_loss[0][1]
-        eval_delta = eval_loss[-1][1] - eval_loss[0][1]
-        if train_delta < -1e-4 and eval_delta > 1e-4:
+    best_eval = _best_point(eval_loss, higher_is_better=False)
+    if best_eval is not None and len(eval_loss) >= 2 and train_loss:
+        best_step, best_value = best_eval
+        last_step, last_value = eval_loss[-1]
+        train_fell = train_loss[-1][1] < train_loss[0][1] - 1e-4
+        last_is_worse = last_value > best_value + 1e-4 and abs(last_step - best_step) >= 1e-9
+        if train_fell and last_is_worse:
             findings.append(
                 {
                     "level": "warn",
                     "title": "Possible overfitting",
                     "detail": (
-                        f"Train loss fell {train_delta:.4f} while eval_loss rose {eval_delta:.4f}. "
-                        "Prefer an earlier Top-K checkpoint or stop earlier."
+                        f"Train loss fell from {train_loss[0][1]:.4f} to {train_loss[-1][1]:.4f}, "
+                        f"while validation loss peaked at {best_value:.4f} on step { _step(best_step) } "
+                        f"and the last eval is {last_value:.4f} on step { _step(last_step) }. "
+                        "Use the best Top-N checkpoint, not the last one."
                     ),
                 }
             )
-        elif train_delta > -1e-4 and eval_delta > -1e-4:
+        elif abs(train_loss[-1][1] - train_loss[0][1]) <= 1e-4 and abs(last_value - eval_loss[0][1]) <= 1e-4:
             findings.append(
                 {
                     "level": "info",
                     "title": "Little loss movement",
                     "detail": (
-                        "Loss barely moved. Check learning rate, data size, language tags, "
+                        "Loss barely moved from the first logged point to the last. "
+                        "Check the learning rate, the amount of data, the language tags, "
                         "and that the checkpoint direction matches the pairs."
                     ),
                 }
             )
     chrf = _numeric_col(metrics, "chrf2pp")
-    if len(chrf) >= 2 and chrf[-1][1] + 0.5 < chrf[0][1]:
-        findings.append(
-            {
-                "level": "warn",
-                "title": "chrF++ regressed",
-                "detail": (
-                    f"chrF++ went from {chrf[0][1]:.2f} to {chrf[-1][1]:.2f}. "
-                    "Inspect worst examples and consider the best Top-K step, not the last."
-                ),
-            }
-        )
+    best_chrf = _best_point(chrf, higher_is_better=True)
+    if best_chrf is not None and len(chrf) >= 2:
+        last_step, last_value = chrf[-1]
+        if last_value + 0.5 < best_chrf[1] and abs(last_step - best_chrf[0]) >= 1e-9:
+            findings.append(
+                {
+                    "level": "warn",
+                    "title": "chrF++ regressed",
+                    "detail": (
+                        f"chrF++ peaked at {best_chrf[1]:.2f} on step { _step(best_chrf[0]) } "
+                        f"and the last step is {last_value:.2f}. "
+                        "This score is for reading the run. It does not choose final_model."
+                    ),
+                }
+            )
     if samples:
         latest = max(_to_float(row.get("step")) or 0 for row in samples)
         latest_rows = [row for row in samples if (_to_float(row.get("step")) or 0) == latest]
@@ -142,20 +233,28 @@ def _build_findings(
                 {
                     "level": "info",
                     "title": "Exact-match rate (latest eval)",
-                    "detail": f"{exact}/{len(latest_rows)} = {100.0 * exact / len(latest_rows):.1f}%.",
+                    "detail": (
+                        f"{exact}/{len(latest_rows)} = {100.0 * exact / len(latest_rows):.1f}%. "
+                        "Exact match stays near zero on real sentences. Use chrF++ by language below."
+                    ),
                 }
             )
     if manifest and manifest.get("checkpoints"):
-        tops = [c for c in manifest["checkpoints"] if c.get("in_top_k")]
-        lasts = [c for c in manifest["checkpoints"] if c.get("in_last_k")]
+        tops = [row for row in manifest["checkpoints"] if row.get("in_top_k")]
+        lasts = [row for row in manifest["checkpoints"] if row.get("in_last_k")]
+        last_names = ", ".join(
+            Path(str(row.get("path", ""))).name
+            for row in sorted(lasts, key=lambda item: _to_float(item.get("step")) or 0)
+        ) or "none"
         findings.append(
             {
                 "level": "info",
                 "title": "Checkpoint retention",
                 "detail": (
                     f"Kept {len(manifest['checkpoints'])} checkpoints "
-                    f"(Top-K={manifest.get('top_k')}, Last-K={manifest.get('last_k')}; "
-                    f"{len(tops)} in Top-K, {len(lasts)} in Last-K)."
+                    f"(Top-N={manifest.get('top_k')}, Last-N={manifest.get('last_k')}; "
+                    f"{len(tops)} in Top-N, {len(lasts)} in Last-N). "
+                    f"Last-N folders: {last_names}."
                 ),
             }
         )
@@ -164,7 +263,7 @@ def _build_findings(
             {
                 "level": "info",
                 "title": "No strong anomalies",
-                "detail": "Review the charts and worst examples below for subtler issues.",
+                "detail": "Review the charts, the language table, and the worst sentences below.",
             }
         )
     return findings
@@ -182,39 +281,225 @@ def _per_language_stats(samples: list[dict], latest_step_only: bool = True) -> l
         key = f"{row.get('src_lang', '?')}→{row.get('tgt_lang', '?')}"
         buckets[key].append(row)
     stats = []
-    for pair, items in sorted(buckets.items()):
+    for pair, items in buckets.items():
         exact = sum(
             1 for row in items if _normalize(row.get("hyp")) == _normalize(row.get("ref"))
         )
-        avg_edit = sum(_token_edit_rate(row.get("ref"), row.get("hyp")) for row in items) / max(
-            len(items), 1
-        )
+        refs = [row.get("ref") or "" for row in items]
+        hyps = [row.get("hyp") or "" for row in items]
+        chrf = _corpus_chrf(hyps, refs)
+        avg_edit = sum(_token_edit_rate(ref, hyp) for ref, hyp in zip(refs, hyps)) / max(len(items), 1)
         stats.append(
             {
                 "pair": pair,
                 "n": len(items),
+                "chrf2pp": None if chrf is None else round(chrf, 2),
                 "exact_match_pct": round(100.0 * exact / len(items), 2),
                 "mean_token_edit_rate": round(avg_edit, 4),
             }
         )
+    stats.sort(key=lambda item: (item["chrf2pp"] is None, item["chrf2pp"] if item["chrf2pp"] is not None else 0))
     return stats
 
 
-def _worst_examples(samples: list[dict], worst_n: int, latest_step_only: bool) -> list[dict]:
+def _worst_examples(samples: list[dict], worst_n: int) -> list[dict]:
+    """Worst latest sentences, with the best earlier chrF++ for the same source."""
     if not samples:
         return []
-    rows = samples
-    if latest_step_only:
-        latest = max(_to_float(row.get("step")) or 0 for row in samples)
-        rows = [row for row in samples if (_to_float(row.get("step")) or 0) == latest]
+    grouped: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for row in samples:
+        key = (
+            str(row.get("src_lang") or ""),
+            str(row.get("tgt_lang") or ""),
+            str(row.get("src") or ""),
+        )
+        grouped[key].append(row)
     scored = []
-    for row in rows:
-        ref = row.get("ref") or ""
-        hyp = row.get("hyp") or ""
-        rate = _token_edit_rate(ref, hyp)
-        scored.append({**row, "token_edit_rate": round(rate, 4)})
-    scored.sort(key=lambda item: item["token_edit_rate"], reverse=True)
+    for (src_lang, tgt_lang, src), rows in grouped.items():
+        history = []
+        for row in rows:
+            step = _to_float(row.get("step")) or 0
+            hyp = row.get("hyp") or ""
+            ref = row.get("ref") or ""
+            history.append(
+                {
+                    "step": step,
+                    "hyp": hyp,
+                    "ref": ref,
+                    "chrf2pp": _sentence_chrf(hyp, ref),
+                }
+            )
+        history.sort(key=lambda item: item["step"])
+        latest = history[-1]
+        ranked = [item for item in history if item["chrf2pp"] is not None]
+        best = max(ranked, key=lambda item: item["chrf2pp"]) if ranked else latest
+        latest_score = latest["chrf2pp"]
+        best_score = best.get("chrf2pp")
+        change = None
+        if latest_score is not None and best_score is not None:
+            change = round(latest_score - best_score, 2)
+        scored.append(
+            {
+                "step": latest["step"],
+                "src_lang": src_lang,
+                "tgt_lang": tgt_lang,
+                "src": src,
+                "ref": latest["ref"],
+                "hyp": latest["hyp"],
+                "chrf2pp": None if latest_score is None else round(latest_score, 2),
+                "best_chrf2pp": None if best_score is None else round(best_score, 2),
+                "best_step": best["step"],
+                "best_hyp": best["hyp"],
+                "change": change,
+                "token_edit_rate": round(_token_edit_rate(latest["ref"], latest["hyp"]), 4),
+            }
+        )
+    scored.sort(
+        key=lambda item: (
+            item["chrf2pp"] is None,
+            item["chrf2pp"] if item["chrf2pp"] is not None else 999,
+        )
+    )
     return scored[:worst_n]
+
+
+def _corpus_chrf(hypotheses: list[str], references: list[str]) -> float | None:
+    metric = _chrf_metric()
+    if metric is None or not references:
+        return None
+    try:
+        return float(metric.corpus_score(hypotheses, [references]).score)
+    except Exception:
+        return None
+
+
+def _sentence_chrf(hypothesis: str, reference: str) -> float | None:
+    metric = _chrf_metric()
+    if metric is None:
+        return None
+    try:
+        return float(metric.sentence_score(hypothesis or "", [reference or ""]).score)
+    except Exception:
+        return None
+
+
+def _chrf_metric():
+    if getattr(_chrf_metric, "cached", None) is not None or getattr(_chrf_metric, "failed", False):
+        return getattr(_chrf_metric, "cached", None)
+    try:
+        from sacrebleu.metrics import CHRF
+
+        _chrf_metric.cached = CHRF(word_order=2)
+    except Exception:
+        _chrf_metric.failed = True
+        _chrf_metric.cached = None
+    return _chrf_metric.cached
+
+
+def _chart_blocks(logs: list[dict], metrics: list[dict]) -> list[str]:
+    blocks = [
+        _svg_overlay(
+            "Loss",
+            [
+                ("Train loss", _numeric_col(logs, "loss"), "#0b6e4f"),
+                ("Validation loss", _numeric_col(logs, "eval_loss"), "#9a6700"),
+            ],
+            lower_is_better=True,
+        )
+    ]
+    for key in ("eval_entropy", "eval_mean_token_accuracy", "learning_rate"):
+        blocks.append(_svg_one(logs, key))
+    for key in ("chrf2pp", "comet", "bleu", "bertscore", "meteor", "ter", "exact_match"):
+        points = _numeric_col(metrics, key)
+        if points:
+            blocks.append(_svg_series(_METRIC_LABELS[key], points, _HIGHER_IS_BETTER[key], "#1d4f91"))
+    return [block for block in blocks if block]
+
+
+def _svg_one(rows: list[dict], key: str) -> str:
+    points = _numeric_col(rows, key)
+    if not points:
+        return ""
+    return _svg_series(_METRIC_LABELS[key], points, _HIGHER_IS_BETTER[key], "#1d4f91")
+
+
+def _svg_overlay(title: str, series: list[tuple[str, list[tuple[float, float]], str]], lower_is_better: bool) -> str:
+    present = [(name, points, color) for name, points, color in series if points]
+    if not present:
+        return ""
+    return _svg(title, present, lower_is_better)
+
+
+def _svg_series(title: str, points: list[tuple[float, float]], higher_is_better: bool, color: str) -> str:
+    return _svg(title, [(title, points, color)], lower_is_better=not higher_is_better)
+
+
+def _svg(title: str, series: list[tuple[str, list[tuple[float, float]], str]], lower_is_better: bool) -> str:
+    width, height = 640, 210
+    left, right, top, bottom = 52, 16, 16, 32
+    xs = [step for _name, points, _color in series for step, _value in points]
+    ys = [value for _name, points, _color in series for _step, value in points]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    if xmax == xmin:
+        xmax = xmin + 1
+    span = ymax - ymin
+    pad = span * 0.15 if span else max(abs(ymin) * 0.05, 0.05)
+    ymin -= pad
+    ymax += pad
+    if ymax == ymin:
+        ymax = ymin + 1
+
+    def x_of(step: float) -> float:
+        return left + (step - xmin) / (xmax - xmin) * (width - left - right)
+
+    def y_of(value: float) -> float:
+        return top + (ymax - value) / (ymax - ymin) * (height - top - bottom)
+
+    grid = []
+    for tick in range(4):
+        value = ymin + (ymax - ymin) * tick / 3
+        y = y_of(value)
+        grid.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#d5e0da" />'
+            f'<text x="{left - 6}" y="{y + 4:.1f}" text-anchor="end" font-size="11" fill="#4a5c55">{value:.3g}</text>'
+        )
+    paths = []
+    marks = []
+    legend = []
+    focus = series[1][1] if len(series) > 1 else series[0][1]
+    best = _best_point(focus, higher_is_better=not lower_is_better)
+    last = focus[-1]
+    for index, (name, points, color) in enumerate(series):
+        coords = " ".join(f"{x_of(step):.1f},{y_of(value):.1f}" for step, value in points)
+        paths.append(
+            f'<polyline fill="none" stroke="{color}" stroke-width="2.2" points="{coords}" />'
+        )
+        legend.append(
+            f'<rect x="{left + index * 170}" y="{height - 16}" width="10" height="10" fill="{color}" />'
+            f'<text x="{left + 14 + index * 170}" y="{height - 7}" font-size="12" fill="#14201c">{html.escape(name)}</text>'
+        )
+    if best is not None:
+        marks.append(
+            f'<circle cx="{x_of(best[0]):.1f}" cy="{y_of(best[1]):.1f}" r="4.5" fill="#0b6e4f" />'
+        )
+    marks.append(
+        f'<circle cx="{x_of(last[0]):.1f}" cy="{y_of(last[1]):.1f}" r="3.5" fill="#a11d2c" />'
+    )
+    direction = "lower is better" if lower_is_better else "higher is better"
+    caption = f"{direction}. Green dot is the best point on this chart. Red dot is the last point."
+    if best is not None:
+        caption += f" Best {best[1]:.4g} at step {_step(best[0])}. Last {last[1]:.4g} at step {_step(last[0])}."
+    return (
+        '<figure class="chart">'
+        f"<figcaption><strong>{html.escape(title)}</strong> {html.escape(caption)}</figcaption>"
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}">'
+        + "".join(grid)
+        + "".join(paths)
+        + "".join(marks)
+        + "".join(legend)
+        + "</svg></figure>"
+    )
 
 
 def _token_edit_rate(ref: str | None, hyp: str | None) -> float:
@@ -234,35 +519,13 @@ def _levenshtein(left: list[str], right: list[str]) -> int:
     if not right:
         return len(left)
     prev = list(range(len(right) + 1))
-    for i, a in enumerate(left, start=1):
+    for i, token in enumerate(left, start=1):
         curr = [i]
-        for j, b in enumerate(right, start=1):
-            cost = 0 if a == b else 1
+        for j, other in enumerate(right, start=1):
+            cost = 0 if token == other else 1
             curr.append(min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost))
         prev = curr
     return prev[-1]
-
-
-def _series(rows: list[dict], x_key: str, y_keys: list[str]) -> dict[str, list]:
-    xs: list[float] = []
-    series = {key: [] for key in y_keys}
-    for row in rows:
-        x = _to_float(row.get(x_key))
-        if x is None:
-            continue
-        present = False
-        values = {}
-        for key in y_keys:
-            value = _to_float(row.get(key))
-            values[key] = value
-            if value is not None:
-                present = True
-        if not present:
-            continue
-        xs.append(x)
-        for key in y_keys:
-            series[key].append(values[key])
-    return {"steps": xs, "series": series}
 
 
 def _numeric_col(rows: list[dict], key: str) -> list[tuple[float, float]]:
@@ -287,6 +550,12 @@ def _to_float(value: Any) -> float | None:
     return number
 
 
+def _step(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return f"{value:g}"
+
+
 def _normalize(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
 
@@ -307,8 +576,9 @@ def _read_json(path: Path) -> dict | None:
 def _render_html(
     run_dir: Path,
     meta: dict,
+    recommendation: str,
     findings: list[dict],
-    charts: dict,
+    charts: list[str],
     per_lang: list[dict],
     worst: list[dict],
     manifest: dict | None,
@@ -325,33 +595,37 @@ def _render_html(
         "<tr>"
         f"<td>{html.escape(row['pair'])}</td>"
         f"<td>{row['n']}</td>"
+        f"<td>{'' if row['chrf2pp'] is None else row['chrf2pp']}</td>"
         f"<td>{row['exact_match_pct']}</td>"
         f"<td>{row['mean_token_edit_rate']}</td>"
         "</tr>"
         for row in per_lang
-    ) or "<tr><td colspan='4'>No eval_samples.csv</td></tr>"
+    ) or "<tr><td colspan='5'>No eval_samples.csv</td></tr>"
     worst_rows = "".join(
         "<tr>"
-        f"<td>{html.escape(str(row.get('step', '')))}</td>"
         f"<td>{html.escape(str(row.get('src_lang', '')))}→{html.escape(str(row.get('tgt_lang', '')))}</td>"
-        f"<td>{row.get('token_edit_rate', '')}</td>"
+        f"<td>{'' if row.get('chrf2pp') is None else row.get('chrf2pp')}</td>"
+        f"<td>{'' if row.get('best_chrf2pp') is None else row.get('best_chrf2pp')} "
+        f"(step { _step(float(row.get('best_step') or 0)) })</td>"
+        f"<td>{'' if row.get('change') is None else row.get('change')}</td>"
         f"<td>{html.escape(str(row.get('src', '')))}</td>"
         f"<td>{html.escape(str(row.get('ref', '')))}</td>"
         f"<td>{html.escape(str(row.get('hyp', '')))}</td>"
+        f"<td>{html.escape(str(row.get('best_hyp', '')))}</td>"
         "</tr>"
         for row in worst
-    ) or "<tr><td colspan='6'>No eval samples</td></tr>"
+    ) or "<tr><td colspan='8'>No eval samples</td></tr>"
     ckpt_rows = ""
     if manifest and manifest.get("checkpoints"):
         for row in manifest["checkpoints"]:
             flags = []
             if row.get("in_top_k"):
-                flags.append("top-k")
+                flags.append("top-n")
             if row.get("in_last_k"):
-                flags.append("last-k")
+                flags.append("last-n")
             ckpt_rows += (
                 "<tr>"
-                f"<td>{html.escape(Path(row['path']).name)}</td>"
+                f"<td>{html.escape(Path(str(row.get('path', ''))).name)}</td>"
                 f"<td>{row.get('step')}</td>"
                 f"<td>{'' if row.get('score') is None else row.get('score')}</td>"
                 f"<td>{html.escape(', '.join(flags))}</td>"
@@ -359,21 +633,19 @@ def _render_html(
             )
     else:
         ckpt_rows = "<tr><td colspan='4'>No checkpoint_manifest.json</td></tr>"
+    columns = _metric_columns(metric_tail)
     metric_rows = "".join(
-        "<tr>"
-        + "".join(f"<td>{html.escape(str(row.get(col, '')))}</td>" for col in _metric_columns(metric_tail))
-        + "</tr>"
+        "<tr>" + "".join(f"<td>{html.escape(str(row.get(col, '')))}</td>" for col in columns) + "</tr>"
         for row in metric_tail
     )
-    metric_head = "".join(f"<th>{html.escape(col)}</th>" for col in _metric_columns(metric_tail))
-    payload = json.dumps(charts, ensure_ascii=False)
+    metric_head = "".join(f"<th>{html.escape(col)}</th>" for col in columns)
+    charts_html = "".join(charts) or "<p>No numeric logs to chart.</p>"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>IndicTrans2 RCA — {html.escape(run_dir.name)}</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root {{
     --bg: #eef3f1;
@@ -381,7 +653,6 @@ def _render_html(
     --muted: #4a5c55;
     --card: #ffffff;
     --line: #c5d4cd;
-    --accent: #0b6e4f;
     --warn: #9a6700;
     --error: #a11d2c;
     --info: #1d4f91;
@@ -396,60 +667,50 @@ def _render_html(
       linear-gradient(340deg, #d6e0f0 0%, transparent 38%),
       var(--bg);
   }}
-  header {{
-    padding: 2.5rem 1.5rem 1rem;
-    max-width: 1100px;
-    margin: 0 auto;
-  }}
+  header, main {{ max-width: 1100px; margin: 0 auto; }}
+  header {{ padding: 2.2rem 1.5rem 0.5rem; }}
   header h1 {{
     margin: 0 0 0.35rem;
-    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    font-size: clamp(1.8rem, 4vw, 2.5rem);
     letter-spacing: -0.02em;
-    font-family: "IBM Plex Sans", "Source Sans 3", sans-serif;
-    font-weight: 650;
   }}
-  header p {{ margin: 0; color: var(--muted); max-width: 42rem; }}
-  main {{
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 0 1.5rem 3rem;
-    display: grid;
-    gap: 1.25rem;
-  }}
+  header p, .recommend p {{ margin: 0.4rem 0 0; color: var(--muted); }}
+  main {{ padding: 0 1.5rem 3rem; display: grid; gap: 1.1rem; }}
   section {{
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: 14px;
-    padding: 1.1rem 1.2rem 1.25rem;
+    padding: 1.05rem 1.15rem 1.2rem;
   }}
-  section h2 {{
-    margin: 0 0 0.75rem;
-    font-size: 1.15rem;
+  section h2 {{ margin: 0 0 0.7rem; font-size: 1.12rem; }}
+  .recommend {{
+    border-left: 4px solid #0b6e4f;
+    background: #f3faf7;
   }}
-  .grid {{
+  .charts {{
     display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0.8rem;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }}
+  figure.chart {{ margin: 0; }}
+  figure.chart figcaption {{ color: var(--muted); font-size: 0.86rem; margin-bottom: 0.25rem; }}
+  figure.chart strong {{ color: var(--ink); }}
+  svg {{ width: 100%; height: auto; background: #f8fbf9; border-radius: 10px; }}
   .finding {{
     border-left: 4px solid var(--info);
     background: #f3f7fb;
-    padding: 0.75rem 0.9rem;
-    margin-bottom: 0.6rem;
+    padding: 0.7rem 0.85rem;
+    margin-bottom: 0.55rem;
     border-radius: 0 10px 10px 0;
   }}
   .finding.warn {{ border-left-color: var(--warn); background: #fff9eb; }}
   .finding.error {{ border-left-color: var(--error); background: #fff0f1; }}
-  .finding p {{ margin: 0.35rem 0 0; color: var(--muted); }}
-  table {{
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.92rem;
-  }}
+  .finding p {{ margin: 0.3rem 0 0; color: var(--muted); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.92rem; }}
   th, td {{
     border-bottom: 1px solid var(--line);
     text-align: left;
-    padding: 0.45rem 0.4rem;
+    padding: 0.42rem 0.35rem;
     vertical-align: top;
   }}
   th {{ color: var(--muted); font-weight: 600; }}
@@ -463,62 +724,48 @@ def _render_html(
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.82rem;
   }}
-  canvas {{ width: 100% !important; max-height: 280px; }}
-  .scroll {{ overflow: auto; max-height: 420px; }}
+  .scroll {{ overflow: auto; max-height: 460px; }}
 </style>
 </head>
 <body>
 <header>
   <h1>IndicTrans2 training RCA</h1>
-  <p>Offline analysis for <code>{html.escape(str(run_dir))}</code>. Charts use CSV logs from the run; translation metrics never choose checkpoints.</p>
+  <p>One file for <code>{html.escape(str(run_dir))}</code>. Charts are drawn in the page, so it opens without a network.</p>
 </header>
 <main>
+  <section class="recommend">
+    <h2>What to use</h2>
+    <p>{html.escape(recommendation)}</p>
+  </section>
   <section>
     <h2>Findings</h2>
     {findings_html}
   </section>
   <section>
-    <h2>Run metadata</h2>
-    <pre>{meta_block}</pre>
-  </section>
-  <section class="grid">
-    <div>
-      <h2>Loss</h2>
-      <canvas id="chart-loss"></canvas>
-    </div>
-    <div>
-      <h2>Token diagnostics</h2>
-      <canvas id="chart-token"></canvas>
-    </div>
-    <div>
-      <h2>MT metrics</h2>
-      <canvas id="chart-mt"></canvas>
-    </div>
-    <div>
-      <h2>Learning rate</h2>
-      <canvas id="chart-lr"></canvas>
-    </div>
+    <h2>Charts</h2>
+    <div class="charts">{charts_html}</div>
   </section>
   <section>
-    <h2>Per-language breakdown (latest eval)</h2>
+    <h2>Per-language chrF++ (latest eval, worst first)</h2>
     <div class="scroll">
       <table>
-        <thead><tr><th>Pair</th><th>n</th><th>Exact match %</th><th>Mean token edit rate</th></tr></thead>
+        <thead><tr><th>Pair</th><th>n</th><th>chrF++</th><th>Exact match %</th><th>Mean token edit rate</th></tr></thead>
         <tbody>{lang_rows}</tbody>
       </table>
     </div>
   </section>
   <section>
-    <h2>Worst hypotheses (latest eval)</h2>
+    <h2>Worst sentences</h2>
+    <p>Sorted by the latest chrF++. The best earlier score for the same source shows whether the sentence used to be better.</p>
     <div class="scroll">
       <table>
-        <thead><tr><th>Step</th><th>Pair</th><th>Edit rate</th><th>Src</th><th>Ref</th><th>Hyp</th></tr></thead>
+        <thead><tr><th>Pair</th><th>Latest chrF++</th><th>Best chrF++</th><th>Change</th><th>Src</th><th>Ref</th><th>Latest hyp</th><th>Hyp at best step</th></tr></thead>
         <tbody>{worst_rows}</tbody>
       </table>
     </div>
   </section>
   <section>
-    <h2>Checkpoints (Top-K ∪ Last-K)</h2>
+    <h2>Checkpoints (Top-N and Last-N)</h2>
     <div class="scroll">
       <table>
         <thead><tr><th>Checkpoint</th><th>Step</th><th>Score</th><th>Kept as</th></tr></thead>
@@ -535,41 +782,11 @@ def _render_html(
       </table>
     </div>
   </section>
+  <section>
+    <h2>Run metadata</h2>
+    <pre>{meta_block}</pre>
+  </section>
 </main>
-<script>
-const DATA = {payload};
-function lineChart(id, title, keys, colors) {{
-  const ctx = document.getElementById(id);
-  if (!ctx) return;
-  const pack = DATA[title];
-  const datasets = keys.map((key, index) => ({{
-    label: key,
-    data: (pack.series[key] || []).map((y, i) => ({{ x: pack.steps[i], y }})),
-    borderColor: colors[index % colors.length],
-    backgroundColor: "transparent",
-    spanGaps: true,
-    tension: 0.2,
-    pointRadius: 2,
-  }})).filter(ds => ds.data.some(p => p.y !== null && p.y !== undefined));
-  new Chart(ctx, {{
-    type: "line",
-    data: {{ datasets }},
-    options: {{
-      responsive: true,
-      scales: {{
-        x: {{ type: "linear", title: {{ display: true, text: "step" }} }},
-        y: {{ title: {{ display: true, text: "value" }} }},
-      }},
-      plugins: {{ legend: {{ position: "bottom" }} }},
-    }},
-  }});
-}}
-lineChart("chart-loss", "loss", ["loss", "eval_loss"], ["#0f6b5c", "#8a4b08"]);
-lineChart("chart-token", "token", ["eval_entropy", "eval_mean_token_accuracy"], ["#1f4b7a", "#0f6b5c"]);
-lineChart("chart-mt", "mt", ["chrf2pp", "comet", "bleu", "bertscore", "meteor", "ter", "exact_match"],
-  ["#0f6b5c", "#1f4b7a", "#8a4b08", "#5c5346", "#8b1e1e", "#4a3f35", "#2f6f4e"]);
-lineChart("chart-lr", "lr", ["learning_rate"], ["#1f4b7a"]);
-</script>
 </body>
 </html>
 """

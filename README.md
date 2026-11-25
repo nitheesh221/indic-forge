@@ -63,7 +63,7 @@ After training:
 indictrans2-ft analyze --run-dir it2_out/lora
 ```
 
-That writes `it2_out/lora/rca_report.html` with loss curves, MT metric trends, per-language breakdown, worst hypotheses, checkpoint Top-K/Last-K table, and automatic findings (overfitting, chrF++ regression, empty hyps). For live curves during training, pass `--report_to tensorboard`.
+That writes `it2_out/lora/rca_report.html`. Open it in a browser. It needs no network: each metric is its own chart, drawn in the file. The top of the page names the best validation-loss step and the last step. Below that are findings, per-language chrF++, the worst sentences with their earlier score, and the Top-N / Last-N table. How to read the page is in [docs/rca.md](docs/rca.md). For live curves during training, pass `--report_to tensorboard`.
 
 ## Setup
 

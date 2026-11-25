@@ -218,10 +218,34 @@ def test_analyze_builds_html(tmp_path: Path):
     report = analyze_run(tmp_path)
     text = report.read_text(encoding="utf-8")
     assert "Possible overfitting" in text
+    assert "step 1" in text
     assert "chrF++ regressed" in text
     assert "eng_Latn→hin_Deva" in text
-    assert "chart.js" in text.lower()
-    assert "new Chart" in text
+    assert "<svg" in text
+    assert "chart.js" not in text.lower()
+    assert "cdn.jsdelivr.net" not in text
+    assert "chrF++" in text
+
+
+def test_analyze_names_the_peak_when_the_end_is_not_the_start(tmp_path: Path):
+    (tmp_path / "training_logs.csv").write_text(
+        "step,loss,eval_loss\n1,2.0,2.0\n2,1.0,0.5\n3,0.8,0.9\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eval_metrics.csv").write_text(
+        "step,chrf2pp\n1,10.0\n2,50.0\n3,40.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eval_samples.csv").write_text(
+        "step,src_lang,tgt_lang,src,ref,hyp\n"
+        "2,eng_Latn,hin_Deva,card,कार्ड,कार्ड\n"
+        "3,eng_Latn,hin_Deva,card,कार्ड,गलत\n",
+        encoding="utf-8",
+    )
+    text = analyze_run(tmp_path).read_text(encoding="utf-8")
+    assert "step 2" in text
+    assert "0.5000" in text
+    assert "Best chrF++" in text or "best chrF++" in text.lower() or "chrF++ is highest at step 2" in text
 
 
 def test_token_edit_rate_identity():
