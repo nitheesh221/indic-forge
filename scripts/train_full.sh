@@ -44,9 +44,14 @@ ARGS=(
   --generation_num_beams "${GENERATION_NUM_BEAMS:-5}"
   --save_strategy "${SAVE_STRATEGY:-epoch}"
   --save_steps "${SAVE_STEPS:-500}"
-  --save_total_limit "${SAVE_TOTAL_LIMIT:-3}"
+  --save_total_limit "${SAVE_TOTAL_LIMIT:-0}"
   --metric_for_best_model "${METRIC_FOR_BEST_MODEL:-eval_loss}"
   --top_n_checkpoints "${TOP_N_CHECKPOINTS:-3}"
+  --last_k_checkpoints "${LAST_K_CHECKPOINTS:-2}"
+  --train_method "${TRAIN_METHOD:-sft}"
+  --label_smoothing_factor "${LABEL_SMOOTHING_FACTOR:-0.1}"
+  --distribution "${DISTRIBUTION:-auto}"
+  --fsdp "${FSDP:-full_shard auto_wrap}"
   --eval_metrics ${EVAL_METRICS:-chrf2pp comet bleu bertscore meteor ter exact_match}
   --eval_metrics_csv "${EVAL_METRICS_CSV:-eval_metrics.csv}"
   --eval_samples_csv "${EVAL_SAMPLES_CSV:-eval_samples.csv}"
@@ -77,5 +82,12 @@ fi
 [[ "${GRADIENT_CHECKPOINTING:-1}" == 1 ]] && ARGS+=(--gradient_checkpointing)
 [[ "${BF16:-1}" == 1 ]] && ARGS+=(--bf16)
 [[ "${FP16:-0}" == 1 ]] && ARGS+=(--fp16) # Do not enable together with BF16.
+[[ -n "${DEEPSPEED:-}" ]] && ARGS+=(--deepspeed "$DEEPSPEED")
+# WRITE_RCA=0 disables the post-train HTML report.
+if [[ "${WRITE_RCA:-1}" == 1 ]]; then
+  ARGS+=(--write_rca)
+else
+  ARGS+=(--no-write_rca)
+fi
 
 python train.py "${ARGS[@]}"

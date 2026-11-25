@@ -236,7 +236,8 @@ python train.py \\
   --final_model_dir it2_out/lora/final_model \\
   --epochs 2 --learning_rate 2e-4 --bf16 \\
   --eval_strategy epoch --save_strategy epoch \\
-  --metric_for_best_model eval_loss --top_n_checkpoints 3
+  --metric_for_best_model eval_loss --top_n_checkpoints 3 --last_k_checkpoints 2 \\
+  --train_method sft --distribution auto --label_smoothing_factor 0.1
 
 # Translate with the adapter
 indictrans2-ft translate \\

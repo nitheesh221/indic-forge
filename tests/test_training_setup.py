@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from indictrans2_finetune.callbacks import (
+    CheckpointRetentionCallback,
     TopNCheckpointCallback,
     generate_translations,
     retention_count,
@@ -55,7 +56,10 @@ def test_mode_defaults():
     assert "fc1" in wide.lora_target_modules and "out_proj" in wide.lora_target_modules
     qlora = _args("qlora")
     assert qlora.optim == "paged_adamw_32bit"
-    assert qlora.keep_checkpoints == 1
+    assert qlora.keep_checkpoints == 5
+    assert qlora.train_method == "sft"
+    assert qlora.top_n_checkpoints == 3
+    assert qlora.last_k_checkpoints == 2
 
 
 def test_one_gpu_id_disables_data_parallel():
@@ -211,7 +215,8 @@ def test_top_n_keeps_lower_loss(tmp_path: Path):
     callback.on_save(args, state, None)
     assert first.exists()
     assert not second.exists()
-    assert retention_count(3, 1) == 1
+    assert retention_count(3, 0, 1) == 1
+    assert isinstance(callback, CheckpointRetentionCallback)
 
 
 def test_batch_collator_pads_without_toolkit_helper():

@@ -8,12 +8,72 @@ This repo follows the official data layout from [`huggingface_interface/train_lo
 
 - Convert JSONL or CSV into that layout, or let `train.py` convert it
 - Pick the right checkpoint (`en-indic`, `indic-en`, or `indic-indic`; distilled or 1B)
-- Train with `full`, `full_lora`, `lora`, or `qlora`
+- Train with SFT under `full`, `full_lora`, `lora`, or `qlora`
+- Keep **Top-K ∪ Last-K** checkpoints and write a retention manifest
+- Multi-GPU via `--distribution auto|ddp|fsdp|deepspeed`
+- Offline RCA HTML from training CSVs (`indictrans2-ft analyze`)
 - Score chrF++, COMET, SacreBLEU, BERTScore, METEOR, TER, and exact match
 - A small web UI for the recipe, data conversion, and a translation box
 - A 40/8 English–Hindi **public-services** sample (Aadhaar, UPI, PM-Kisan, GST, …) so you can dry-run the pipeline
 
 GPU is strongly recommended for training. Distilled models can run inference on CPU, slowly. The playground UI does **not** need a GPU until you press Translate.
+
+## Recommended setup (research decisions)
+
+### 1. Training method → **SFT** (not GRPO by default)
+
+IndicTrans2 is an encoder–decoder MT model. With parallel text the right objective is **supervised fine-tuning (SFT)**: teacher-forced cross-entropy on target tokens, which is what AI4Bharat’s official LoRA script uses.
+
+| Method | When it fits IndicTrans2 | Status here |
+| --- | --- | --- |
+| **SFT** | You have parallel `src`/`tgt` (normal case) | **Default** (`--train_method sft`) |
+| GRPO / PPO | Second stage: K samples + reference-free reward (e.g. LaBSE/COMET-Kiwi) when parallel data is thin | Reserved; rejected until implemented |
+| DPO / ORPO | You already have chosen/rejected pairs | Reserved; rejected |
+| KTO | Preference-style alignment without paired rejects (shown on Indic *LLM* MT) | Reserved; rejected |
+
+`--train_mode lora|qlora|full_lora|full` only changes *what parameters update* under SFT. Label smoothing defaults to `0.1` (set `--label_smoothing_factor 0` to disable). Training ends by writing `rca_report.html` unless you pass `--no-write_rca`.
+
+### 2. Checkpoints → **Top-K ∪ Last-K**
+
+- `--top_n_checkpoints` (default `3`): keep the best SFT metric values (`eval_loss` by default).
+- `--last_k_checkpoints` (default `2`): also keep the most recent saves for resume / late-stage RCA.
+- Retention is the **union** (overlap kept once). Optional `--save_total_limit N` hard-caps the union; `0` means no extra cap.
+- MT metrics (chrF++, COMET, …) are logged for analysis and **never** select checkpoints.
+- Each save updates `checkpoint_manifest.json` under `--output_dir`.
+
+### 3. Distribution → **`auto`**, then DDP / FSDP / DeepSpeed as needed
+
+| Strategy | Best for |
+| --- | --- |
+| `auto` (default) | 1 GPU in-process; 2+ GPUs via DDP (`torchrun`) |
+| `ddp` | LoRA / QLoRA multi-GPU (recommended) |
+| `fsdp` | Full fine-tune of the 1B when memory is tight |
+| `deepspeed` | Full FT with ZeRO-2 (`configs/ds_zero2.json`) or ZeRO-3 |
+
+QLoRA rejects FSDP and DeepSpeed here. Example DeepSpeed full run:
+
+```bash
+python train.py \
+  --gpu_ids 0,1 \
+  --distribution deepspeed \
+  --deepspeed configs/ds_zero2.json \
+  --train_mode full \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_json sample_train_data/indic_en_22.json \
+  --val_json sample_train_data/indic_en_22.json \
+  --output_dir it2_out/full_ds \
+  --bf16 --gradient_checkpointing
+```
+
+### 4. Visualization / RCA → offline HTML report
+
+After training:
+
+```bash
+indictrans2-ft analyze --run-dir it2_out/lora
+```
+
+That writes `it2_out/lora/rca_report.html` with loss curves, MT metric trends, per-language breakdown, worst hypotheses, checkpoint Top-K/Last-K table, and automatic findings (overfitting, chrF++ regression, empty hyps). For live curves during training, pass `--report_to tensorboard`.
 
 ## Setup
 
@@ -78,19 +138,23 @@ One GPU, mixed JSON (tags come from the file):
 python train.py \
   --gpu_ids 0 \
   --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
+  --train_method sft \
   --train_mode lora \
+  --distribution auto \
   --train_json sample_train_data/indic_en_22.json \
   --val_json sample_train_data/indic_en_22.json \
   --output_dir it2_out/lora \
   --final_model_dir it2_out/lora/final_model \
   --epochs 2 \
   --learning_rate 2e-4 \
+  --label_smoothing_factor 0.1 \
   --bf16 \
   --gradient_checkpointing \
   --eval_strategy epoch \
   --save_strategy epoch \
   --metric_for_best_model eval_loss \
-  --top_n_checkpoints 3
+  --top_n_checkpoints 3 \
+  --last_k_checkpoints 2
 ```
 
 Several GPUs — do not also pass `--gpu_ids`:

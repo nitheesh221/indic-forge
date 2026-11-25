@@ -17,8 +17,8 @@ from transformers import (
 )
 
 from indictrans2_finetune.callbacks import (
+    CheckpointRetentionCallback,
     CsvLogCallback,
-    TopNCheckpointCallback,
     TranslationMetricsCallback,
 )
 from indictrans2_finetune.config import maybe_relaunch, parse_args
@@ -67,9 +67,16 @@ def run(args) -> Path:
         )
     )
     trainer_box: dict = {"tokenizer": tokenizer}
+    limit = args.save_total_limit if args.save_total_limit and args.save_total_limit > 0 else None
     callbacks = [
         CsvLogCallback(output_dir / args.training_logs_csv),
-        TopNCheckpointCallback(args.metric_for_best_model, args.greater_is_better, args.keep_checkpoints),
+        CheckpointRetentionCallback(
+            args.metric_for_best_model,
+            args.greater_is_better,
+            top_k=args.top_n_checkpoints,
+            last_k=args.last_k_checkpoints,
+            save_total_limit=limit,
+        ),
     ]
     if args.eval_strategy != "no":
         callbacks.append(
@@ -99,24 +106,40 @@ def run(args) -> Path:
     trainer = Seq2SeqTrainer(**trainer_kwargs)
     trainer_box["model"] = trainer.model
     print(
-        f" | > mode={args.train_mode} model={args.model_id} "
-        f"train={len(train_dataset)} dev={len(eval_dataset)}"
+        f" | > method={args.train_method} mode={args.train_mode} "
+        f"distribution={args.distribution} model={args.model_id} "
+        f"train={len(train_dataset)} dev={len(eval_dataset)} "
+        f"checkpoints=top{args.top_n_checkpoints}+last{args.last_k_checkpoints}"
     )
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     final_dir = _save_final(trainer.model, tokenizer, args)
     meta = {
+        "train_method": args.train_method,
         "train_mode": args.train_mode,
+        "distribution": args.distribution,
         "model_hf_id": args.model_hf_id,
         "model_id": args.model_id,
         "src_lang": args.trained_src_lang,
         "tgt_lang": args.trained_tgt_lang,
         "pairs": [f"{src}-{tgt}" for src, tgt, _count in args.train_pairs],
         "learning_rate": args.learning_rate,
+        "label_smoothing_factor": args.label_smoothing_factor,
         "lora_target_modules": args.lora_target_modules,
+        "top_n_checkpoints": args.top_n_checkpoints,
+        "last_k_checkpoints": args.last_k_checkpoints,
+        "metric_for_best_model": args.metric_for_best_model,
         "eval_metrics": args.eval_metrics,
     }
     (final_dir / "finetune_meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     print(f" | > Saved final model to {final_dir}")
+    if getattr(args, "write_rca", True):
+        try:
+            from indictrans2_finetune.analyze import analyze_run
+
+            report = analyze_run(output_dir)
+            print(f" | > RCA report: {report}")
+        except Exception as exc:  # noqa: BLE001 — RCA must not fail the train run
+            print(f" | > RCA report skipped: {type(exc).__name__}: {exc}")
     return final_dir
 
 
@@ -237,6 +260,7 @@ def _save_final(model, tokenizer, args) -> Path:
 
 
 def _training_arguments(args) -> Seq2SeqTrainingArguments:
+    report_to = [] if args.report_to == "none" else [args.report_to]
     kwargs = {
         "output_dir": args.output_dir,
         "num_train_epochs": args.epochs,
@@ -246,6 +270,7 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
         "learning_rate": args.learning_rate,
         "weight_decay": args.weight_decay,
         "warmup_ratio": args.warmup_ratio,
+        "label_smoothing_factor": args.label_smoothing_factor,
         "lr_scheduler_type": args.lr_scheduler_type,
         "optim": args.optim,
         "max_grad_norm": args.max_grad_norm,
@@ -264,7 +289,7 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
         "eval_accumulation_steps": args.eval_accumulation_steps,
         "dataloader_num_workers": args.num_workers,
         "seed": args.seed,
-        "report_to": [],
+        "report_to": report_to,
         "bf16": args.bf16,
         "fp16": args.fp16,
         "gradient_checkpointing": args.gradient_checkpointing,
@@ -279,6 +304,12 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
         kwargs["dataloader_prefetch_factor"] = 2
     if args.gradient_checkpointing and "gradient_checkpointing_kwargs" in signature.parameters:
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    if args.distribution == "fsdp" and "fsdp" in signature.parameters:
+        kwargs["fsdp"] = args.fsdp
+        if "fsdp_config" in signature.parameters:
+            kwargs["fsdp_config"] = {"min_num_params": 1_000_000}
+    if args.distribution == "deepspeed" and args.deepspeed and "deepspeed" in signature.parameters:
+        kwargs["deepspeed"] = args.deepspeed
     training = Seq2SeqTrainingArguments(**kwargs)
     if getattr(args, "visible_gpu_count", None) == 1:
         # Hugging Face wraps a 4-bit QLoRA model in DataParallel when it

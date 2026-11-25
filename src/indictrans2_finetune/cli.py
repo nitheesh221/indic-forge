@@ -195,6 +195,29 @@ def eval_cmd(
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+@app.command("analyze")
+def analyze_cmd(
+    run_dir: Path = typer.Option(
+        ...,
+        "--run-dir",
+        exists=True,
+        file_okay=False,
+        help="Training --output_dir with CSV logs.",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        help="HTML path. Defaults to <run-dir>/rca_report.html.",
+    ),
+    worst_n: int = typer.Option(25, "--worst-n", help="Worst hypotheses to list."),
+) -> None:
+    """Build an offline RCA HTML report from training CSVs."""
+    from indictrans2_finetune.analyze import analyze_run
+
+    path = analyze_run(run_dir, output_html=output, worst_n=worst_n)
+    typer.echo(str(path))
+
+
 @app.command("ui")
 def ui_cmd(
     host: str = typer.Option("0.0.0.0"),

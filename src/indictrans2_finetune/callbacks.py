@@ -1,8 +1,14 @@
-"""Checkpoint retention and CSV logs. Translation metrics do not select checkpoints."""
+"""Checkpoint retention (Top-K ∪ Last-K) and CSV logs.
+
+Translation metrics are written for analysis but never select checkpoints.
+Checkpoint ranking stays on SFT metrics: eval_loss, eval_entropy,
+eval_mean_token_accuracy.
+"""
 
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 from pathlib import Path
 
@@ -13,8 +19,14 @@ from indictrans2_finetune.metrics_mt import score_translations
 from indictrans2_finetune.toolkit import get_processor
 
 
-def retention_count(top_n: int, save_total_limit: int) -> int:
-    return max(1, min(top_n, save_total_limit))
+def retention_count(top_k: int, last_k: int, save_total_limit: int | None = None) -> int:
+    """Maximum checkpoints kept when Top-K and Last-K do not overlap."""
+    union = max(0, top_k) + max(0, last_k)
+    if union == 0:
+        union = 1
+    if save_total_limit is None or save_total_limit <= 0:
+        return union
+    return max(1, min(union, save_total_limit))
 
 
 class CsvLogCallback(TrainerCallback):
@@ -29,28 +41,135 @@ class CsvLogCallback(TrainerCallback):
         _append_row(self.path, row)
 
 
-class TopNCheckpointCallback(TrainerCallback):
-    def __init__(self, metric: str, greater_is_better: bool, keep: int):
+class CheckpointRetentionCallback(TrainerCallback):
+    """Keep the union of Top-K by metric and Last-K by recency.
+
+    Top-K selects the best SFT metric values for final model choice.
+    Last-K keeps the most recent saves so you can resume or inspect late
+    training even if the metric drifted. Overlap is kept once.
+    """
+
+    def __init__(
+        self,
+        metric: str,
+        greater_is_better: bool,
+        top_k: int,
+        last_k: int,
+        save_total_limit: int | None = None,
+        manifest_name: str = "checkpoint_manifest.json",
+    ):
         self.metric = metric
         self.greater_is_better = greater_is_better
-        self.keep = keep
-        self.scored: list[tuple[float, str]] = []
+        self.top_k = max(0, int(top_k))
+        self.last_k = max(0, int(last_k))
+        if self.top_k == 0 and self.last_k == 0:
+            self.last_k = 1
+        self.save_total_limit = save_total_limit
+        self.manifest_name = manifest_name
+        # (score, step, path)
+        self.scored: list[tuple[float, int, str]] = []
 
     def on_save(self, args, state, control, **kwargs):
         if not state.is_world_process_zero:
             return
-        score = _latest_metric(state.log_history, self.metric)
         checkpoint = Path(args.output_dir) / f"checkpoint-{state.global_step}"
-        if score is None or not checkpoint.exists():
+        if not checkpoint.exists():
             return
-        self.scored.append((score, str(checkpoint)))
-        ranked = sorted(self.scored, key=lambda item: item[0], reverse=self.greater_is_better)
-        keep = {path for _score, path in ranked[: self.keep]}
-        for _score, path in ranked[self.keep :]:
-            target = Path(path)
-            if target.exists():
-                shutil.rmtree(target)
-        self.scored = [(score, path) for score, path in ranked if path in keep]
+        score = _latest_metric(state.log_history, self.metric)
+        if score is None:
+            # Save happened without a fresh eval (strategy mismatch). Still
+            # track for Last-K using a sentinel that never wins Top-K.
+            score = float("-inf") if self.greater_is_better else float("inf")
+        self.scored = [
+            (existing_score, step, path)
+            for existing_score, step, path in self.scored
+            if step != state.global_step
+        ]
+        self.scored.append((float(score), state.global_step, str(checkpoint)))
+        keep = self._paths_to_keep()
+        for _score, _step, path in list(self.scored):
+            if path not in keep:
+                target = Path(path)
+                if target.exists():
+                    shutil.rmtree(target)
+        self.scored = [
+            (score, step, path) for score, step, path in self.scored if path in keep
+        ]
+        self._write_manifest(Path(args.output_dir))
+
+    def _paths_to_keep(self) -> set[str]:
+        ranked = sorted(
+            self.scored,
+            key=lambda item: item[0],
+            reverse=self.greater_is_better,
+        )
+        # Drop sentinels from Top-K contention when real scores exist.
+        real = [
+            item
+            for item in ranked
+            if item[0] not in (float("inf"), float("-inf"))
+        ]
+        top = {path for _score, _step, path in (real or ranked)[: self.top_k]}
+        recent = sorted(self.scored, key=lambda item: item[1], reverse=True)
+        last = {path for _score, _step, path in recent[: self.last_k]}
+        keep = top | last
+        if self.save_total_limit and self.save_total_limit > 0 and len(keep) > self.save_total_limit:
+            # Prefer metric Top-K only, then fill with most recent until the hard cap.
+            # Do not walk the full metric ranking here — that would pull mediocre
+            # Last-K members ahead of the newest checkpoint.
+            # Stable Top-K order: best metric first.
+            ordered = [
+                path
+                for _score, _step, path in (real or ranked)
+                if path in top
+            ]
+            for _score, _step, path in sorted(self.scored, key=lambda item: item[1], reverse=True):
+                if path in keep and path not in ordered:
+                    ordered.append(path)
+            keep = set(ordered[: self.save_total_limit])
+        return keep
+
+    def _write_manifest(self, output_dir: Path) -> None:
+        ranked = sorted(
+            self.scored,
+            key=lambda item: item[0],
+            reverse=self.greater_is_better,
+        )
+        recent = sorted(self.scored, key=lambda item: item[1], reverse=True)
+        top_paths = {path for _s, _st, path in ranked[: self.top_k]}
+        last_paths = {path for _s, _st, path in recent[: self.last_k]}
+        payload = {
+            "metric": self.metric,
+            "greater_is_better": self.greater_is_better,
+            "top_k": self.top_k,
+            "last_k": self.last_k,
+            "save_total_limit": self.save_total_limit,
+            "checkpoints": [
+                {
+                    "path": path,
+                    "step": step,
+                    "score": None if score in (float("inf"), float("-inf")) else score,
+                    "in_top_k": path in top_paths,
+                    "in_last_k": path in last_paths,
+                }
+                for score, step, path in sorted(self.scored, key=lambda item: item[1])
+            ],
+        }
+        (output_dir / self.manifest_name).write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+
+
+# Backward-compatible name used by older tests and imports.
+class TopNCheckpointCallback(CheckpointRetentionCallback):
+    def __init__(self, metric: str, greater_is_better: bool, keep: int):
+        super().__init__(
+            metric=metric,
+            greater_is_better=greater_is_better,
+            top_k=keep,
+            last_k=0,
+            save_total_limit=None,
+        )
 
 
 class TranslationMetricsCallback(TrainerCallback):

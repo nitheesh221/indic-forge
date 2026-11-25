@@ -6,13 +6,18 @@
 # =============================================================================
 # 0a. SKIPPED FROM QWEN (not used for IndicTrans2 translation)
 # =============================================================================
-# --deepspeed / ds_zero3.json
 # --freeze_vision / freeze encoder
 # --image_size, --jpeg_quality, Pillow
 # --system_prompt, --user_prompt, prompt files, chat templates
 # TRL SFTTrainer prompt-token masking (this is seq2seq NMT, not VL OCR)
 # OCR metrics: cer wer anls token_set_ratio wratio hallucination_rate
 # full_qlora (rejected in Qwen; still rejected here)
+# GRPO / DPO training loops (reserved; SFT is the supported method)
+
+# Training method: --train_method sft (default). label_smoothing_factor default 0.1.
+# Reserved (rejected): grpo, dpo, kto — second-stage / preference methods.
+# DeepSpeed / FSDP: supported via --distribution deepspeed|fsdp (not for QLoRA).
+# --write_rca / --no-write_rca  default: write rca_report.html after train.
 
 # =============================================================================
 # 0. ENVIRONMENT / PYTHON PACKAGES
@@ -232,9 +237,9 @@ pytest>=8.0.0
 # =============================================================================
 # --save_strategy      default: epoch
 # --save_steps         default: 500
-# --save_total_limit   default: 1
-#   notes: Trainer prune disabled; Top-N retention =
-#          min(top_n_checkpoints, save_total_limit) when both are set
+# --save_total_limit   default: 0
+#   notes: Trainer prune disabled. Retention is Top-K ∪ Last-K.
+#          save_total_limit > 0 is an optional hard cap on that union.
 
 # =============================================================================
 # 6. BEST MODEL METRIC  (Trainer/SFT only — not MT metrics)
@@ -246,9 +251,11 @@ pytest>=8.0.0
 #   higher-is-better: eval_mean_token_accuracy
 
 # =============================================================================
-# 7. TOP-N CHECKPOINTS
+# 7. TOP-K + LAST-K CHECKPOINTS
 # =============================================================================
-# --top_n_checkpoints   default: 1
+# --top_n_checkpoints    default: 3   keep best by --metric_for_best_model
+# --last_k_checkpoints   default: 2   also keep most recent
+# Writes checkpoint_manifest.json under --output_dir after each save.
 
 # =============================================================================
 # 8. TRANSLATION METRICS (CSV + eval command; do NOT select checkpoints)
@@ -307,7 +314,12 @@ pytest>=8.0.0
 # --num_workers              default: 4
 # --gradient_checkpointing   flag, default: false
 # --bf16 / --fp16            mutually exclusive flags
-# SKIP: --deepspeed, --freeze_vision
+# --distribution   choices: auto | ddp | fsdp | deepspeed   default: auto
+# --deepspeed      path to JSON; defaults to configs/ds_zero2.json when
+#                  --distribution deepspeed
+# --fsdp           default: "full_shard auto_wrap" (used when distribution=fsdp)
+# QLoRA rejects fsdp and deepspeed.
+# Prefer ddp for LoRA/QLoRA; fsdp/deepspeed for full 1B memory pressure.
 
 # Small-GPU full FT (no ZeRO): --gpu_ids 0, --optim adamw_bnb_8bit,
 #   --batch_size 1 --gradient_accumulation_steps 8 --gradient_checkpointing
@@ -319,20 +331,25 @@ pytest>=8.0.0
 #   incompatible with optimizer restore if --save_only_model was used
 
 # =============================================================================
-# 16. REPORTING
+# 16. REPORTING / RCA
 # =============================================================================
-# --report_to   choices: none   default: none
+# --report_to   choices: none | tensorboard   default: none
+# Offline RCA: indictrans2-ft analyze --run-dir <output_dir>
+#   writes rca_report.html (loss, MT metrics, per-lang, worst hyps, checkpoints)
 
 # =============================================================================
 # 17. OUTPUTS
 # =============================================================================
-# checkpoint-*         under --output_dir, kept by Top-N SFT metric
-# eval_metrics.csv     Trainer eval_* plus mean MT scores
-# eval_samples.csv     src_lang / tgt_lang / src / ref / hyp
-# training_logs.csv    Trainer log rows
-# --final_model_dir    full weights (full, full_lora) or adapter (lora, qlora)
-# finetune_meta.json   written next to the final model; records model_hf_id,
-#                      train_mode, languages, learning_rate, LoRA targets, metrics
+# checkpoint-*             under --output_dir, kept by Top-K ∪ Last-K
+# checkpoint_manifest.json Top-K / Last-K membership and scores
+# eval_metrics.csv         Trainer eval_* plus mean MT scores
+# eval_samples.csv         src_lang / tgt_lang / src / ref / hyp
+# training_logs.csv        Trainer log rows
+# rca_report.html          from `indictrans2-ft analyze`
+# --final_model_dir        full weights (full, full_lora) or adapter (lora, qlora)
+# finetune_meta.json       written next to the final model; records method,
+#                          distribution, model_hf_id, train_mode, languages,
+#                          learning_rate, label smoothing, LoRA targets, metrics
 # inference_predictions.csv   written by JSON inference (see section 18)
 # inference_metrics.csv       written by JSON inference (see section 18)
 
