@@ -35,16 +35,50 @@ def _ter(hypotheses: list[str], references: list[str]) -> float:
     return TER().corpus_score(hypotheses, [references]).score
 
 
-def _comet(sources: list[str], hypotheses: list[str], references: list[str]) -> float:
-    from comet import download_model, load_from_checkpoint
+_COMET_MODEL = None
 
-    checkpoint = download_model("Unbabel/wmt22-comet-da")
-    model = load_from_checkpoint(checkpoint)
+
+def _load_comet():
+    """Load COMET once. A second language pair must not read the checkpoint again."""
+    global _COMET_MODEL
+    if _COMET_MODEL is None:
+        from comet import download_model, load_from_checkpoint
+
+        _COMET_MODEL = load_from_checkpoint(download_model("Unbabel/wmt22-comet-da"))
+    return _COMET_MODEL
+
+
+def _comet_predict(model, samples):
+    import torch
+
+    common = {"batch_size": 8, "progress_bar": False}
+    if torch.cuda.is_available():
+        attempts = (
+            {**common, "accelerator": "gpu", "devices": 1},
+            {**common, "gpus": 1},
+        )
+    else:
+        attempts = (
+            {**common, "accelerator": "cpu"},
+            {**common, "gpus": 0},
+        )
+    last_error: TypeError | None = None
+    for kwargs in attempts:
+        try:
+            return model.predict(samples, **kwargs)
+        except TypeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("COMET predict was not called")
+
+
+def _comet(sources: list[str], hypotheses: list[str], references: list[str]) -> float:
     samples = [
         {"src": src, "mt": hyp, "ref": ref}
         for src, hyp, ref in zip(sources, hypotheses, references)
     ]
-    prediction = model.predict(samples, batch_size=8, gpus=0, progress_bar=False)
+    prediction = _comet_predict(_load_comet(), samples)
     score = float(prediction.system_score)
     return score * 100.0 if score <= 1.5 else score
 

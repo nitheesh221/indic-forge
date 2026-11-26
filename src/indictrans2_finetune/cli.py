@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -96,10 +97,30 @@ def translate_cmd(
     max_length: int = typer.Option(256, "--max-length"),
     num_beams: int = typer.Option(5, "--num-beams"),
     batch_size: int = typer.Option(8, "--batch-size", help="Sentences per generate call."),
+    gpu_ids: Optional[str] = typer.Option(
+        None,
+        "--gpu-ids",
+        help="Comma-separated GPU indices, for example 0,1. Two or more split the file.",
+    ),
+    local_rank: Optional[int] = typer.Option(
+        None,
+        "--local-rank",
+        "--local_rank",
+        help="Set by torchrun.",
+    ),
 ) -> None:
     """Translate one sentence, a text file, or a train/val JSON file."""
+    del local_rank
+    from indictrans2_finetune.infer_launch import relaunch_translate_if_needed
+
+    relaunch_translate_if_needed(gpu_ids)
     from indictrans2_finetune.evaluate import evaluate_json
-    from indictrans2_finetune.infer import maybe_adapter_base, translate_batch
+    from indictrans2_finetune.infer import (
+        maybe_adapter_base,
+        release_inference_model,
+        shutdown_inference_group,
+        translate_across_ranks,
+    )
 
     if json_file and (text or file):
         raise typer.BadParameter("Pass --json-file or --text/--file, not both.")
@@ -119,6 +140,8 @@ def translate_cmd(
             visualize=visualize or report_html is not None,
             report_html=report_html,
         )
+        if not result.get("primary", True):
+            return
         lines = [
             f"scored {result['n']} rows, skipped {result['skipped']}",
             f"predictions: {result['predictions_csv']}",
@@ -144,19 +167,21 @@ def translate_cmd(
     src = normalize_lang(src_lang)
     tgt = normalize_lang(tgt_lang)
     model_name = model or maybe_adapter_base(adapter) or default_model(src, tgt)
-    for src_sent, hyp in zip(
+    hypotheses = translate_across_ranks(
         sentences,
-        translate_batch(
-            sentences,
-            src,
-            tgt,
-            model_name=model_name,
-            adapter=str(adapter) if adapter else None,
-            max_length=max_length,
-            num_beams=num_beams,
-            batch_size=batch_size,
-        ),
-    ):
+        src,
+        tgt,
+        model_name=model_name,
+        adapter=str(adapter) if adapter else None,
+        max_length=max_length,
+        num_beams=num_beams,
+        batch_size=batch_size,
+    )
+    release_inference_model()
+    shutdown_inference_group()
+    if int(os.environ.get("RANK", "0") or "0") != 0:
+        return
+    for src_sent, hyp in zip(sentences, hypotheses):
         typer.echo(f"{src}: {src_sent}")
         typer.echo(f"{tgt}: {hyp}")
         typer.echo("")

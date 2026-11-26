@@ -7,7 +7,14 @@ from collections import defaultdict
 from pathlib import Path
 
 from indictrans2_finetune.data import iter_rows, rows_to_pairs, validate_official_dir
-from indictrans2_finetune.infer import maybe_adapter_base, translate_batch
+from indictrans2_finetune.infer import (
+    inference_rank_and_world,
+    maybe_adapter_base,
+    release_inference_model,
+    shutdown_inference_group,
+    translate_across_ranks,
+    translate_batch,
+)
 from indictrans2_finetune.langs import default_model, normalize_lang
 from indictrans2_finetune.metrics_mt import METRIC_ORDER, score_translations
 
@@ -104,12 +111,16 @@ def evaluate_json(
         grouped[(pair_src, pair_tgt)][0].append(source)
         grouped[(pair_src, pair_tgt)][1].append(reference)
 
+    rank, world = inference_rank_and_world()
+    if rank == 0 and world > 1:
+        print(f" | > inference gpus={world}. Each GPU translates its own share of the file.")
     prediction_rows: list[dict] = []
     metric_rows: list[dict] = []
+    translated: list[tuple[str, str, str, list[str], list[str], list[str]]] = []
     resolved_model = model_name or maybe_adapter_base(Path(adapter) if adapter else None)
     for (pair_src, pair_tgt), (sources, references) in grouped.items():
         active_model = resolved_model or default_model(pair_src, pair_tgt)
-        hypotheses = translate_batch(
+        hypotheses = translate_across_ranks(
             sources,
             pair_src,
             pair_tgt,
@@ -119,6 +130,21 @@ def evaluate_json(
             num_beams=num_beams,
             batch_size=batch_size,
         )
+        if rank == 0:
+            translated.append((pair_src, pair_tgt, active_model, sources, references, hypotheses))
+    release_inference_model()
+    shutdown_inference_group()
+    if rank != 0:
+        return {
+            "n": 0,
+            "skipped": skipped,
+            "metrics": [],
+            "predictions_csv": "",
+            "metrics_csv": "",
+            "report_html": None,
+            "primary": False,
+        }
+    for pair_src, pair_tgt, active_model, sources, references, hypotheses in translated:
         scores, errors = score_translations(sources, hypotheses, references, selected)
         for source, reference, hypothesis in zip(sources, references, hypotheses):
             prediction_rows.append(
@@ -164,6 +190,7 @@ def evaluate_json(
         "predictions_csv": str(predictions_path),
         "metrics_csv": str(metrics_path),
         "report_html": None if report_path is None else str(report_path),
+        "primary": True,
     }
 
 

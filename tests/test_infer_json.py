@@ -9,6 +9,53 @@ from indictrans2_finetune.cli import app, collapse_eval_metrics
 from indictrans2_finetune.evaluate import evaluate_json, resolve_metrics
 
 
+def test_gpu_ids_build_a_torchrun_command():
+    from indictrans2_finetune.infer_launch import parse_gpu_ids, translate_launch_command
+
+    assert parse_gpu_ids("0,1") == ["0", "1"]
+    with pytest.raises(SystemExit, match="comma-separated"):
+        parse_gpu_ids("gpu0")
+    command = translate_launch_command(
+        ["translate", "--gpu-ids", "0,1", "--json-file", "valid.json"],
+        2,
+    )
+    assert "--nproc_per_node" in command and "2" in command
+    assert "--module" in command and "indictrans2_finetune.cli" in command
+    assert "--gpu-ids" not in command
+    assert "translate" in command and "valid.json" in command
+
+
+def test_translate_cli_accepts_gpu_ids(tmp_path: Path, monkeypatch):
+    json_path = tmp_path / "valid.json"
+    json_path.write_text("[]", encoding="utf-8")
+    seen: list[str | None] = []
+
+    def fake_relaunch(gpu_ids):
+        seen.append(gpu_ids)
+
+    def fake_evaluate_json(*_args, **kwargs):
+        return {
+            "n": 0,
+            "skipped": 0,
+            "metrics": [],
+            "predictions_csv": "p.csv",
+            "metrics_csv": "m.csv",
+            "primary": True,
+        }
+
+    monkeypatch.setattr(
+        "indictrans2_finetune.infer_launch.relaunch_translate_if_needed",
+        fake_relaunch,
+    )
+    monkeypatch.setattr("indictrans2_finetune.evaluate.evaluate_json", fake_evaluate_json)
+    result = CliRunner().invoke(
+        app,
+        ["translate", "--json-file", str(json_path), "--gpu-ids", "0,1"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == ["0,1"]
+
+
 def test_eval_metrics_accept_spaces_and_commas():
     argv = collapse_eval_metrics(
         ["translate", "--eval-metrics", "chrf2pp", "bleu,ter", "--max-length", "256"]
@@ -108,7 +155,7 @@ def test_json_inference_writes_prediction_and_metric_csvs(tmp_path: Path, monkey
         assert tgt_lang == "eng_Latn"
         return ["Newcomer Rhea"]
 
-    monkeypatch.setattr("indictrans2_finetune.evaluate.translate_batch", fake_translate)
+    monkeypatch.setattr("indictrans2_finetune.infer.translate_batch", fake_translate)
     result = evaluate_json(
         json_path,
         src_lang="asm_Beng",
@@ -204,7 +251,7 @@ def test_visualize_flag_is_off_unless_asked(tmp_path: Path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "indictrans2_finetune.evaluate.translate_batch",
+        "indictrans2_finetune.infer.translate_batch",
         lambda sentences, src_lang, tgt_lang, **_kwargs: ["Newcomer"] * len(sentences),
     )
     result = evaluate_json(
@@ -245,7 +292,7 @@ def test_visualize_writes_an_offline_chart_page(tmp_path: Path, monkeypatch):
             return ["good"] * len(sentences)
         return ["wrong"] * len(sentences)
 
-    monkeypatch.setattr("indictrans2_finetune.evaluate.translate_batch", fake_translate)
+    monkeypatch.setattr("indictrans2_finetune.infer.translate_batch", fake_translate)
     report = tmp_path / "charts" / "report.html"
     result = evaluate_json(
         json_path,

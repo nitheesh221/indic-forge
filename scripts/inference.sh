@@ -24,6 +24,8 @@ BATCH_SIZE="${BATCH_SIZE:-8}"         # CLI default: 8 sentences per generate ca
 # VISUALIZE=1 writes inference_report.html. REPORT_HTML overrides that path.
 VISUALIZE="${VISUALIZE:-0}"
 REPORT_HTML="${REPORT_HTML:-}"
+# GPU_IDS=0,1 splits the file across those GPUs. Empty uses one GPU.
+GPU_IDS="${GPU_IDS:-}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-it2_out}"
 # Space-separated subset of: lora qlora lora_continue full_lora full
 MODES="${MODES:-lora qlora lora_continue full_lora full}"
@@ -48,6 +50,7 @@ run_inference() {
   )
   [[ "$VISUALIZE" == 1 ]] && args+=(--visualize)
   [[ -n "$REPORT_HTML" ]] && args+=(--report-html "$REPORT_HTML")
+  [[ -n "$GPU_IDS" ]] && args+=(--gpu-ids "$GPU_IDS")
   [[ -n "$adapter" ]] && args+=(--adapter "$adapter")
   PYTHONPATH=src python -m indictrans2_finetune.cli "${args[@]}"
 }

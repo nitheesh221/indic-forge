@@ -235,6 +235,8 @@ A LoRA or QLoRA model needs `--model` set to the base checkpoint and `--adapter`
 
 Add `--visualize` when you also want a chart page. It writes `inference_report.html` next to the metrics CSV. Open that file in a browser. It needs no network. The page shows one bar chart per score, a histogram of sentence chrF++, and the weakest sentences. `--report-html some/path.html` chooses the file name and turns the page on by itself. Leave both flags off and inference writes only the two CSVs.
 
+`--gpu-ids 0,1` runs one process per GPU. Each GPU loads the model and translates its own share of the file. Rank 0 then scores and writes the CSVs and the chart. One id, or leaving the flag off, stays on a single GPU. Keep `--batch-size 8` with beam 5. The batch is per GPU, so a larger batch can still run a card out of memory.
+
 `indictrans2-ft eval` scores a prepared `data_dir` split the same way.
 
 ## Evaluation metrics
@@ -253,7 +255,7 @@ None of these seven choose the best checkpoint. `eval_loss` does.
 
 chrF++, BLEU, TER, and exact match are the ones to watch while the GPU is training. They run inside the process and do not load a second model.
 
-COMET and BERTScore are for the offline command above. COMET imports `pkg_resources`, so install `setuptools>=69,<81` before `unbabel-comet`. The first call downloads the COMET model and then reuses the cache. COMET is run on the CPU on purpose, so it does not fight IndicTrans2 for the GPU. It is slow. BERTScore wants the GPU. Run it after training has exited, when the translation model is no longer loaded. If either one throws, the error string is stored and the rest of the metrics are kept.
+COMET and BERTScore are for the offline command above. COMET imports `pkg_resources`, so install `setuptools>=69,<81` before `unbabel-comet`. The first call downloads `Unbabel/wmt22-comet-da` and later language pairs reuse that loaded copy. Translation releases the IndicTrans2 weights before scoring, and COMET then uses one GPU. Scoring is not split across GPUs. If either metric throws, the error string is stored and the rest of the metrics are kept.
 
 The training CSV is `eval_metrics.csv`. A bare file name is written under `--output_dir`. A path that already contains a directory is used as given, so it is not nested twice. If the first row is a failure and a later row adds chrF++, the header is rewritten so the new columns are not dropped. `eval_samples.csv` stores `src_lang`, `tgt_lang`, `src`, `ref`, and `hyp` for each sentence.
 

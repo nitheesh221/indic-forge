@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from peft import PeftModel
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
+from indictrans2_finetune.callbacks import assemble_translations, translation_slices
 from indictrans2_finetune.langs import default_model, normalize_lang
 from indictrans2_finetune.toolkit import get_processor
 
@@ -20,7 +24,42 @@ _SAVED_TOKENIZER_KEYS = ("src_vocab_file", "tgt_vocab_file", "src_spm", "tgt_spm
 
 
 def _device() -> torch.device:
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    local = os.environ.get("LOCAL_RANK")
+    if local is not None and local.isdigit():
+        index = int(local)
+        torch.cuda.set_device(index)
+        return torch.device("cuda", index)
+    return torch.device("cuda")
+
+
+def inference_rank_and_world() -> tuple[int, int]:
+    """Join the process group torchrun started. One GPU stays a single process."""
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank(), dist.get_world_size()
+    world = int(os.environ.get("WORLD_SIZE", "1") or "1")
+    rank = int(os.environ.get("RANK", "0") or "0")
+    if world <= 1:
+        return 0, 1
+    if not torch.cuda.is_available():
+        raise SystemExit("Multi-GPU inference needs CUDA.")
+    local = int(os.environ.get("LOCAL_RANK", "0") or "0")
+    torch.cuda.set_device(local)
+    dist.init_process_group(backend="nccl", timeout=timedelta(hours=4))
+    return dist.get_rank(), dist.get_world_size()
+
+
+def shutdown_inference_group() -> None:
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def release_inference_model() -> None:
+    """Drop the translation model so COMET or BERTScore can use the GPU."""
+    load_pipeline.cache_clear()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def tokenizer_source(model_name: str) -> str:
@@ -170,13 +209,19 @@ def translate_batch(
     model_name = model_name or default_model(src_lang, tgt_lang)
     if batch_size < 1:
         raise SystemExit("--batch-size must be at least 1")
+    kept = [(offset, sentence.strip()) for offset, sentence in enumerate(sentences) if sentence and sentence.strip()]
+    hypotheses = [""] * len(sentences)
+    if not kept:
+        return hypotheses
     tokenizer, model, processor = load_pipeline(model_name, adapter)
     device = next(model.parameters()).device
-    cleaned = [sentence.strip() for sentence in sentences if sentence.strip()]
-    hypotheses: list[str] = []
-    for start in range(0, len(cleaned), batch_size):
-        chunk = cleaned[start : start + batch_size]
-        batch = processor.preprocess_batch(chunk, src_lang=src_lang, tgt_lang=tgt_lang)
+    for start in range(0, len(kept), batch_size):
+        chunk = kept[start : start + batch_size]
+        batch = processor.preprocess_batch(
+            [sentence for _offset, sentence in chunk],
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+        )
         inputs = tokenizer(
             batch,
             truncation=True,
@@ -197,7 +242,60 @@ def translate_batch(
         decoded = tokenizer.batch_decode(
             generated, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-        hypotheses.extend(processor.postprocess_batch(decoded, lang=tgt_lang))
+        for (offset, _sentence), hypothesis in zip(chunk, processor.postprocess_batch(decoded, lang=tgt_lang)):
+            hypotheses[offset] = hypothesis
+    return hypotheses
+
+
+def translate_across_ranks(
+    sentences: list[str],
+    src_lang: str,
+    tgt_lang: str,
+    model_name: str | None = None,
+    adapter: str | None = None,
+    max_length: int = 256,
+    num_beams: int = 5,
+    batch_size: int = 8,
+) -> list[str]:
+    """Translate on this rank's slice and return the sentences in source order.
+
+    One process translates the whole list. Several processes each take every
+    ``world``-th sentence, then the pieces are zipped back together.
+    """
+    rank, world = inference_rank_and_world()
+    indices = translation_slices(len(sentences), rank, world) if world > 1 else list(range(len(sentences)))
+    local_error = None
+    rows: list[tuple[int, str]] = []
+    try:
+        if indices:
+            local = translate_batch(
+                [sentences[index] for index in indices],
+                src_lang,
+                tgt_lang,
+                model_name=model_name,
+                adapter=adapter,
+                max_length=max_length,
+                num_beams=num_beams,
+                batch_size=batch_size,
+            )
+            if len(local) != len(indices):
+                raise RuntimeError(
+                    f"rank {rank} produced {len(local)} translations for {len(indices)} sentences"
+                )
+            rows = list(zip(indices, local))
+    except Exception as exc:  # noqa: BLE001 — every rank must still enter the gather
+        local_error = f"rank {rank}: {type(exc).__name__}: {exc}"
+        rows = []
+    if world == 1:
+        if local_error:
+            raise SystemExit(local_error)
+        return [hypothesis for _index, hypothesis in rows]
+    payload = {"rows": rows, "error": local_error}
+    gathered: list[dict | None] = [None] * world
+    dist.all_gather_object(gathered, payload)
+    hypotheses, failure = assemble_translations(gathered, len(sentences))
+    if failure or hypotheses is None:
+        raise SystemExit(failure or "generation failed")
     return hypotheses
 
 
