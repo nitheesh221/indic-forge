@@ -9,6 +9,21 @@ from indictrans2_finetune.cli import app, collapse_eval_metrics
 from indictrans2_finetune.evaluate import evaluate_json, resolve_metrics
 
 
+def test_scoring_forgets_the_torchrun_world(monkeypatch):
+    import os
+
+    from indictrans2_finetune.infer import clear_distributed_env
+
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("TORCHELASTIC_RUN_ID", "1")
+    clear_distributed_env()
+    assert "WORLD_SIZE" not in os.environ
+    assert "LOCAL_RANK" not in os.environ
+    assert "TORCHELASTIC_RUN_ID" not in os.environ
+
+
 def test_gpu_ids_build_a_torchrun_command():
     from indictrans2_finetune.infer_launch import parse_gpu_ids, translate_launch_command
 

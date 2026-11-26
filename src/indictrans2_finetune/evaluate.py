@@ -8,6 +8,7 @@ from pathlib import Path
 
 from indictrans2_finetune.data import iter_rows, rows_to_pairs, validate_official_dir
 from indictrans2_finetune.infer import (
+    clear_distributed_env,
     inference_rank_and_world,
     maybe_adapter_base,
     release_inference_model,
@@ -134,6 +135,7 @@ def evaluate_json(
             translated.append((pair_src, pair_tgt, active_model, sources, references, hypotheses))
     release_inference_model()
     shutdown_inference_group()
+    clear_distributed_env()
     if rank != 0:
         return {
             "n": 0,
@@ -144,6 +146,8 @@ def evaluate_json(
             "report_html": None,
             "primary": False,
         }
+    sentence_count = sum(len(item[3]) for item in translated)
+    print(f" | > scoring {sentence_count} sentences. chrF++, BLEU, TER, and exact match finish first. METEOR, BERTScore, and COMET are the long part and do not print a progress bar.")
     for pair_src, pair_tgt, active_model, sources, references, hypotheses in translated:
         scores, errors = score_translations(sources, hypotheses, references, selected)
         for source, reference, hypothesis in zip(sources, references, hypotheses):

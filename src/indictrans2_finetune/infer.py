@@ -55,6 +55,31 @@ def shutdown_inference_group() -> None:
         dist.destroy_process_group()
 
 
+def clear_distributed_env() -> None:
+    """Drop torchrun's world size before COMET starts.
+
+    Lightning reads ``WORLD_SIZE`` and waits for every rank. The other GPU has
+    already finished translating and exited, so scoring must look like one process.
+    """
+    for key in (
+        "RANK",
+        "WORLD_SIZE",
+        "LOCAL_RANK",
+        "LOCAL_WORLD_SIZE",
+        "GROUP_RANK",
+        "GROUP_WORLD_SIZE",
+        "ROLE_RANK",
+        "ROLE_WORLD_SIZE",
+        "MASTER_ADDR",
+        "MASTER_PORT",
+        "TORCHELASTIC_RUN_ID",
+        "TORCHELASTIC_RESTART_COUNT",
+        "TORCHELASTIC_MAX_RESTARTS",
+        "TORCHELASTIC_USE_AGENT_STORE",
+    ):
+        os.environ.pop(key, None)
+
+
 def release_inference_model() -> None:
     """Drop the translation model so COMET or BERTScore can use the GPU."""
     load_pipeline.cache_clear()
