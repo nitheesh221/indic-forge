@@ -83,6 +83,16 @@ def translate_cmd(
         "--metrics-csv",
         help="Corpus scores for the selected metrics.",
     ),
+    visualize: bool = typer.Option(
+        False,
+        "--visualize",
+        help="Write an offline HTML chart page for a --json-file run.",
+    ),
+    report_html: Optional[Path] = typer.Option(
+        None,
+        "--report-html",
+        help="HTML path for --visualize. Default: inference_report.html next to the metrics CSV.",
+    ),
     max_length: int = typer.Option(256, "--max-length"),
     num_beams: int = typer.Option(5, "--num-beams"),
     batch_size: int = typer.Option(8, "--batch-size", help="Sentences per generate call."),
@@ -106,12 +116,17 @@ def translate_cmd(
             max_length=max_length,
             num_beams=num_beams,
             batch_size=batch_size,
+            visualize=visualize or report_html is not None,
+            report_html=report_html,
         )
-        typer.echo(
-            f"scored {result['n']} rows, skipped {result['skipped']}\n"
-            f"predictions: {result['predictions_csv']}\n"
-            f"metrics: {result['metrics_csv']}"
-        )
+        lines = [
+            f"scored {result['n']} rows, skipped {result['skipped']}",
+            f"predictions: {result['predictions_csv']}",
+            f"metrics: {result['metrics_csv']}",
+        ]
+        if result.get("report_html"):
+            lines.append(f"report: {result['report_html']}")
+        typer.echo("\n".join(lines))
         for row in result["metrics"]:
             typer.echo(json.dumps(row, ensure_ascii=False))
         return

@@ -184,3 +184,114 @@ def test_translate_cli_accepts_spaced_metrics(tmp_path: Path, monkeypatch):
     assert captured["max_length"] == 128
     assert captured["num_beams"] == 4
     assert captured["adapter"] == "it2_out/lora/final_model"
+    assert captured["visualize"] is False
+    assert captured["report_html"] is None
+
+
+def test_visualize_flag_is_off_unless_asked(tmp_path: Path, monkeypatch):
+    json_path = tmp_path / "valid.json"
+    json_path.write_text(
+        json.dumps(
+            [
+                {
+                    "src_lang": "asm_Beng",
+                    "tgt_lang": "eng_Latn",
+                    "src_text": "নৱাগত",
+                    "tgt_text": "Newcomer",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "indictrans2_finetune.evaluate.translate_batch",
+        lambda sentences, src_lang, tgt_lang, **_kwargs: ["Newcomer"] * len(sentences),
+    )
+    result = evaluate_json(
+        json_path,
+        model_name="base",
+        metrics=["exact_match"],
+        predictions_csv=tmp_path / "predictions.csv",
+        metrics_csv=tmp_path / "metrics.csv",
+    )
+    assert result["report_html"] is None
+    assert not (tmp_path / "inference_report.html").exists()
+
+
+def test_visualize_writes_an_offline_chart_page(tmp_path: Path, monkeypatch):
+    json_path = tmp_path / "valid.json"
+    json_path.write_text(
+        json.dumps(
+            [
+                {
+                    "src_lang": "asm_Beng",
+                    "tgt_lang": "eng_Latn",
+                    "src_text": "ভাল",
+                    "tgt_text": "good",
+                },
+                {
+                    "src_lang": "hin_Deva",
+                    "tgt_lang": "eng_Latn",
+                    "src_text": "नाम",
+                    "tgt_text": "name",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_translate(sentences, src_lang, tgt_lang, **_kwargs):
+        if src_lang == "asm_Beng":
+            return ["good"] * len(sentences)
+        return ["wrong"] * len(sentences)
+
+    monkeypatch.setattr("indictrans2_finetune.evaluate.translate_batch", fake_translate)
+    report = tmp_path / "charts" / "report.html"
+    result = evaluate_json(
+        json_path,
+        model_name="base",
+        metrics=["chrf2pp", "bleu"],
+        predictions_csv=tmp_path / "predictions.csv",
+        metrics_csv=tmp_path / "metrics.csv",
+        visualize=True,
+        report_html=report,
+    )
+    assert result["report_html"] == str(report)
+    text = report.read_text(encoding="utf-8")
+    assert "<svg" in text
+    assert "asm_Beng" in text and "hin_Deva" in text
+    assert "chart.js" not in text.lower()
+    assert "Sentence chrF++" in text
+
+
+def test_report_html_flag_turns_visualization_on(tmp_path: Path, monkeypatch):
+    json_path = tmp_path / "valid.json"
+    json_path.write_text("[]", encoding="utf-8")
+    captured: dict = {}
+
+    def fake_evaluate_json(*_args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "n": 1,
+            "skipped": 0,
+            "metrics": [],
+            "predictions_csv": "p.csv",
+            "metrics_csv": "m.csv",
+            "report_html": str(tmp_path / "view.html"),
+        }
+
+    monkeypatch.setattr("indictrans2_finetune.evaluate.evaluate_json", fake_evaluate_json)
+    result = CliRunner().invoke(
+        app,
+        [
+            "translate",
+            "--json-file",
+            str(json_path),
+            "--report-html",
+            str(tmp_path / "view.html"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["visualize"] is True
+    assert captured["report_html"] == tmp_path / "view.html"
+    assert "report:" in result.output

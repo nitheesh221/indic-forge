@@ -85,6 +85,8 @@ def evaluate_json(
     max_length: int = 256,
     num_beams: int = 5,
     batch_size: int = 8,
+    visualize: bool = False,
+    report_html: Path | None = None,
 ) -> dict:
     """Translate a train/val JSON file and score tgt_text as the reference."""
     selected = resolve_metrics(metrics)
@@ -144,12 +146,24 @@ def evaluate_json(
     metrics_path = Path(metrics_csv or "inference_metrics.csv")
     _write_csv(predictions_path, prediction_rows)
     _write_csv(metrics_path, metric_rows)
+    report_path = None
+    if visualize or report_html is not None:
+        from indictrans2_finetune.infer_report import default_report_path, write_inference_report
+
+        report_path = Path(report_html) if report_html is not None else default_report_path(metrics_path)
+        write_inference_report(
+            prediction_rows,
+            metric_rows,
+            report_path,
+            source_name=str(json_path),
+        )
     return {
         "n": len(prediction_rows),
         "skipped": skipped,
         "metrics": metric_rows,
         "predictions_csv": str(predictions_path),
         "metrics_csv": str(metrics_path),
+        "report_html": None if report_path is None else str(report_path),
     }
 
 

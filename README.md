@@ -215,7 +215,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --batch-size 8
 ```
 
-That writes one row per sentence to `inference_predictions.csv` (`src`, `reference`, `prediction`) and one corpus row to `inference_metrics.csv`. A metric that cannot run, such as COMET when `pkg_resources` is missing, is recorded in `metric_errors`. The other scores are still written.
+That writes one row per sentence to `inference_predictions.csv` (`src`, `reference`, `prediction`) and one corpus row to `inference_metrics.csv`. A metric that cannot run, such as COMET when `pkg_resources` is missing, is recorded in `metric_errors`. The other scores are still written. Pass `--visualize` to also write `inference_report.html` beside the metrics CSV: bar charts per score, a sentence chrF++ histogram, and the weakest sentences. The page is offline. `--report-html` sets its path.
 
 `scripts/inference.sh` has the full command for every saved mode: LoRA, QLoRA, continued LoRA, merged `full_lora`, and `full`. It still defaults to Assamese → English. For a mixed JSON file, use the `translate --json-file` command above and omit the language flags. Adapter modes pass `--adapter`. `full_lora` and `full` pass only `--model` pointing at `it2_out/<mode>/final_model`.
 

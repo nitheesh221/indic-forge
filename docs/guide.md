@@ -225,12 +225,15 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv it2_out/full/inference_predictions.csv \
   --metrics-csv it2_out/full/inference_metrics.csv \
+  --visualize \
   --max-length 256 --num-beams 5 --batch-size 8
 ```
 
 A LoRA or QLoRA model needs `--model` set to the base checkpoint and `--adapter` set to `final_model`. A full model or a merged `full_lora` model is passed only as `--model`.
 
 `inference_predictions.csv` has one row per sentence: source, reference, prediction. `inference_metrics.csv` has one corpus row. A metric that fails is named in `metric_errors`. The other scores are still written.
+
+Add `--visualize` when you also want a chart page. It writes `inference_report.html` next to the metrics CSV. Open that file in a browser. It needs no network. The page shows one bar chart per score, a histogram of sentence chrF++, and the weakest sentences. `--report-html some/path.html` chooses the file name and turns the page on by itself. Leave both flags off and inference writes only the two CSVs.
 
 `indictrans2-ft eval` scores a prepared `data_dir` split the same way.
 

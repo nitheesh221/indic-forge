@@ -21,6 +21,9 @@ EVAL_METRICS="${EVAL_METRICS:-chrf2pp comet bleu bertscore meteor ter exact_matc
 MAX_LENGTH="${MAX_LENGTH:-256}"       # CLI default: 256
 NUM_BEAMS="${NUM_BEAMS:-5}"           # CLI default: 5
 BATCH_SIZE="${BATCH_SIZE:-8}"         # CLI default: 8 sentences per generate call
+# VISUALIZE=1 writes inference_report.html. REPORT_HTML overrides that path.
+VISUALIZE="${VISUALIZE:-0}"
+REPORT_HTML="${REPORT_HTML:-}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-it2_out}"
 # Space-separated subset of: lora qlora lora_continue full_lora full
 MODES="${MODES:-lora qlora lora_continue full_lora full}"
@@ -43,6 +46,8 @@ run_inference() {
     --num-beams "$NUM_BEAMS"
     --batch-size "$BATCH_SIZE"
   )
+  [[ "$VISUALIZE" == 1 ]] && args+=(--visualize)
+  [[ -n "$REPORT_HTML" ]] && args+=(--report-html "$REPORT_HTML")
   [[ -n "$adapter" ]] && args+=(--adapter "$adapter")
   PYTHONPATH=src python -m indictrans2_finetune.cli "${args[@]}"
 }

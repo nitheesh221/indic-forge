@@ -36,6 +36,8 @@ def test_every_translate_argument_is_documented_in_inference_script():
         "--eval-metrics",
         "--predictions-csv",
         "--metrics-csv",
+        "--visualize",
+        "--report-html",
         "--max-length",
         "--num-beams",
         "--batch-size",
