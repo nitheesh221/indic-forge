@@ -13,6 +13,8 @@ from indictrans2_finetune.langs import direction_for, normalize_lang
 TRAIN_MODES = ("full", "full_lora", "lora", "qlora")
 DISTRIBUTIONS = ("auto", "ddp", "zero2", "zero3", "offload", "fsdp", "deepspeed")
 DEEPSPEED_DISTRIBUTIONS = ("zero2", "zero3", "offload", "deepspeed")
+# ZeRO shards torch Adam. The 8-bit Adam classes are a different optimizer type.
+ZERO_ADAM_OPTIMIZERS = ("adamw_torch", "adamw_torch_fused", "adamw_hf")
 _DS_CONFIG_FILES = {
     "zero2": "ds_zero2.json",
     "zero3": "ds_zero3.json",
@@ -333,6 +335,13 @@ def _resolve_distribution(args: argparse.Namespace) -> None:
             args.deepspeed = deepspeed_config(_DS_CONFIG_FILES[strategy])
         elif not Path(args.deepspeed).is_file():
             raise SystemExit(f"DeepSpeed config not found: {args.deepspeed}")
+        if args.optim not in ZERO_ADAM_OPTIMIZERS:
+            print(
+                f"Note: --optim {args.optim} cannot be split by ZeRO. "
+                "Using adamw_torch. The 8-bit Adam is for a single GPU, before ZeRO.",
+                file=sys.stderr,
+            )
+            args.optim = "adamw_torch"
         if args.train_mode in {"lora", "full_lora"}:
             print(
                 "Warning: LoRA already fits on one IndicTrans2 GPU. "

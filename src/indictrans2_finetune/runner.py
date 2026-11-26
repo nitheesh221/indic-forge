@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import sys
 from pathlib import Path
 
 import torch
@@ -35,6 +36,29 @@ from indictrans2_finetune.train import (
 )
 
 
+def allow_deepspeed_import_without_dynamo() -> None:
+    """Let ZeRO import on Python 3.13.
+
+    DeepSpeed decorates an unused Muon kernel with ``torch.compile`` while it
+    checks the optimizer. That decorator raises on Python 3.13 before Adam is
+    considered. This run does not use Muon, so the kernel stays eager.
+    """
+    if sys.version_info < (3, 13):
+        return
+
+    def _compile(function=None, *args, **kwargs):
+        del args, kwargs
+        if callable(function):
+            return function
+
+        def decorator(inner):
+            return inner
+
+        return decorator
+
+    torch.compile = _compile
+
+
 def main(argv: list[str] | None = None) -> int:
     maybe_relaunch(argv)
     args = parse_args(argv)
@@ -45,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run(args) -> Path:
+    if args.distribution in DEEPSPEED_DISTRIBUTIONS:
+        allow_deepspeed_import_without_dynamo()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     # Building the training arguments pins this rank to its own GPU and opens

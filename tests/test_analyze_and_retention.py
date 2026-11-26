@@ -217,6 +217,32 @@ def test_hard_cap_prefers_top_then_recent(tmp_path: Path):
     assert "checkpoint-3" not in kept
 
 
+def test_zero_uses_torch_adam():
+    eight_bit = _args(distribution="zero2", train_mode="full", optim="adamw_bnb_8bit")
+    assert eight_bit.optim == "adamw_torch"
+    kept = _args(distribution="zero2", train_mode="full", optim="adamw_torch")
+    assert kept.optim == "adamw_torch"
+
+
+def test_python_313_deepspeed_import_skips_dynamo(monkeypatch):
+    import torch
+
+    from indictrans2_finetune import runner
+
+    original = torch.compile
+    monkeypatch.setattr(runner.sys, "version_info", (3, 13, 0))
+    try:
+        runner.allow_deepspeed_import_without_dynamo()
+
+        def sample(value):
+            return value
+
+        assert torch.compile(sample) is sample
+        assert torch.compile()(sample) is sample
+    finally:
+        torch.compile = original
+
+
 def test_zero_configs_are_selected():
     zero2 = _args(distribution="zero2", train_mode="full")
     assert zero2.distribution == "zero2"
