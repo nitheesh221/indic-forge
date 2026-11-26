@@ -230,6 +230,8 @@ def test_python_313_deepspeed_import_skips_dynamo(monkeypatch):
     from indictrans2_finetune import runner
 
     original = torch.compile
+    compiler = getattr(torch, "compiler", None)
+    original_compiler_compile = getattr(compiler, "compile", None)
     monkeypatch.setattr(runner.sys, "version_info", (3, 13, 0))
     try:
         runner.allow_deepspeed_import_without_dynamo()
@@ -239,8 +241,13 @@ def test_python_313_deepspeed_import_skips_dynamo(monkeypatch):
 
         assert torch.compile(sample) is sample
         assert torch.compile()(sample) is sample
+        if compiler is not None:
+            assert compiler.compile(sample) is sample
+            assert compiler.compile()(sample) is sample
     finally:
         torch.compile = original
+        if compiler is not None and original_compiler_compile is not None:
+            compiler.compile = original_compiler_compile
 
 
 def test_zero_configs_are_selected():

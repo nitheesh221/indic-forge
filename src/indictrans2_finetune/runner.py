@@ -57,6 +57,12 @@ def allow_deepspeed_import_without_dynamo() -> None:
         return decorator
 
     torch.compile = _compile
+    # original_muon.py calls torch.compiler.compile, which keeps its own
+    # reference to the original function. Replacing torch.compile alone misses it.
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and hasattr(compiler, "compile"):
+        compiler.compile = _compile
+    print(" | > Python 3.13: ZeRO imports without torch.compile.", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
