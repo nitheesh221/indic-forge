@@ -78,7 +78,11 @@ On two or more processes the run also does four things that a one-GPU run does n
 
 **Why.** The 1B weights are about 2 GB. The optimizer is what fills a 16 GB card, or a tight 24 GB card, during full fine-tuning. Splitting the optimizer fixes that and still writes a normal checkpoint.
 
-**When.** `--train_mode full` on a 1B checkpoint, and only after a simpler one-GPU attempt is still out of memory. Install DeepSpeed first (`pip install deepspeed`). The same install covers `zero3` and `offload`. Do this first:
+**When.** `--train_mode full` on a 1B checkpoint, and only after DDP with `--optim adamw_bnb_8bit` and `--gradient_checkpointing` is still out of memory. Install DeepSpeed first (`pip install deepspeed`). The same install covers `zero3` and `offload`.
+
+On Python 3.13 with DeepSpeed 0.20.1, ZeRO does not start: importing an unused Muon kernel calls `torch.compile`, and that raises `Dynamo is not supported on Python 3.13+` before Adam is checked. `zero3` and `offload` hit the same line. A two-L4 full 1B run that already fits on DDP at batch 8 should stay on DDP. The error text, the failed patches, and the working command are in [deepspeed.md](deepspeed.md).
+
+Do this first:
 
 ```bash
 python train.py \
@@ -153,7 +157,7 @@ FSDP also slices the model across GPUs. For this repo, DDP is faster when the mo
 1. `auto` on one GPU.
 2. `auto` or `ddp` with `--gpu_ids 0,1` when more GPUs already fit the model and you want speed.
 3. For a full 1B out-of-memory error: one GPU with `--gradient_checkpointing` and `--optim adamw_bnb_8bit`.
-4. Still out of memory on that full 1B run: `zero2`.
+4. Still out of memory on that full 1B run: `zero2`. On Python 3.13 with DeepSpeed 0.20.1, read [deepspeed.md](deepspeed.md) first. ZeRO dies at import, and DDP with 8-bit Adam is the path that fits two 24 GB L4s.
 5. Prefer an adapter instead of updating every weight: `--train_mode qlora` with `auto` or `ddp`.
 6. The weights themselves do not fit: `zero3`.
 7. Last: `offload` (CPU, or NVMe if you edit the config).

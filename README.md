@@ -45,7 +45,7 @@ The full explanation, including when `final_model` becomes the last model and ho
 
 `auto` is the default. One GPU trains in a single process. Two or more ids in `--gpu_ids` use DDP. It does not look at model size or free memory. You change the flag when your situation changes.
 
-The plain-language guide, with what each option is, why it exists, and when to turn it on, is [docs/distribution.md](docs/distribution.md).
+The plain-language guide, with what each option is, why it exists, and when to turn it on, is [docs/distribution.md](docs/distribution.md). Why ZeRO did not start on Python 3.13, and why the two-L4 1B run stayed on DDP, is [docs/deepspeed.md](docs/deepspeed.md).
 
 ```bash
 # usual run: one GPU

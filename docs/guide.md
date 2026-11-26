@@ -267,7 +267,7 @@ The training CSV is `eval_metrics.csv`. A bare file name is written under `--out
 | --- | --- |
 | `auto` | Always, until something does not fit. One GPU is a normal run. Two or more ids become DDP. |
 | `ddp` | You want the command to say DDP. Same path as `auto` with two or more GPUs. |
-| `zero2` | Full fine-tune of the 1B model, and the Adam state does not fit. Set `SAVE_ONLY_MODEL=0`. Install DeepSpeed. |
+| `zero2` | Full fine-tune of the 1B model, and DDP with 8-bit Adam is still out of memory. Set `SAVE_ONLY_MODEL=0`. Install DeepSpeed. On Python 3.13 with DeepSpeed 0.20.1 this flag does not start; see [deepspeed.md](deepspeed.md). |
 | `zero3` | The weights themselves do not fit. Rare for IndicTrans2. The 1B weights are about 2 GB. |
 | `offload` | Last resort. Weights and Adam sit in CPU RAM. It is slow. |
 | `fsdp` | Not the usual choice. DDP is faster when the model fits. `zero2` is the memory tool for a full 1B run. |
@@ -275,7 +275,7 @@ The training CSV is `eval_metrics.csv`. A bare file name is written under `--out
 
 QLoRA allows only `auto` and `ddp`.
 
-The full decision list, including what this project deliberately does not use (DataParallel, ZeRO-1, tensor and pipeline parallelism), is [distribution.md](distribution.md).
+The full decision list, including what this project deliberately does not use (DataParallel, ZeRO-1, tensor and pipeline parallelism), is [distribution.md](distribution.md). The 1B L4 run that stopped in DeepSpeed and then trained with DDP is written up in [deepspeed.md](deepspeed.md).
 
 ## Visualization for analysis (RCA)
 
