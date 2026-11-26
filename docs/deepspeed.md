@@ -1,8 +1,8 @@
-# Why this 1B run uses DDP, not DeepSpeed
+# Why this 1B run uses DDP, not DeepSpeed or FSDP
 
-This page records the Indic-to-English 1B full fine-tune on two NVIDIA L4 GPUs (about 23–24 GB each), the errors that stopped ZeRO, what was tried, and why the other distribution flags are the wrong tool once DDP already fits.
+This page records the Indic-to-English 1B full fine-tune on two NVIDIA L4 GPUs (about 23–24 GB each), the errors that stopped ZeRO, the FSDP trial that was launched and did not train, and why those flags are the wrong tool once DDP already fits.
 
-The short version: DeepSpeed is installed and the `zero2` / `zero3` / `offload` flags are still in the trainer. On this machine they do not start. DDP with 8-bit Adam does, at batch 8. Stay on that run.
+The short version: DeepSpeed is installed and the `zero2` / `zero3` / `offload` flags are still in the trainer. On this machine they do not start. `fsdp` does start wrapping the model, then dies because IndicTrans has no top-level `decoder` attribute. That trial did not produce a training step, and another FSDP command will not. DDP with 8-bit Adam does train, at batch 8. Stay on that run.
 
 The flag guide is [distribution.md](distribution.md). This page is the incident record for the 1B L4 job.
 
@@ -187,6 +187,78 @@ DDP never calls `deepspeed.initialize`, so it never imports Muon and never calls
 
 One watch point remains. Generation at the end of an epoch holds the decoder cache and the vocabulary logits. That peak can be higher than a checkpointed training step at the same batch. If epoch 1 dies with `CUDA out of memory` during evaluation only, keep `--batch_size 8` and set `--eval_batch_size 4`.
 
+### 5. FSDP was launched. It did not train.
+
+FSDP was the remaining flag that does not import DeepSpeed, so it could not hit the Muon `torch.compile` crash. It was tried on the same two L4s, on the same `a0c7bbd` checkout (`runner.py` line 43 was still `run(args)`, line 136 was still `trainer.train`), with a separate output directory and with normal Adam, because FSDP `full_shard` already splits optimizer state:
+
+```bash
+python train.py \
+  --gpu_ids 0,1 \
+  --distribution fsdp \
+  --model_hf_id ai4bharat/indictrans2-indic-en-1B \
+  --train_mode full \
+  --train_json /shared/nithish/INDICTRANS2_train_custom/indic-forge/split_dataset/train.json \
+  --val_json /shared/nithish/INDICTRANS2_train_custom/indic-forge/split_dataset/valid.json \
+  --output_dir OUT2/indic-en-1b-fsdp \
+  --final_model_dir OUT2/indic-en-1b-fsdp/final_model \
+  --epochs 8 \
+  --learning_rate 2e-5 \
+  --bf16 \
+  --gradient_checkpointing \
+  --optim adamw_torch \
+  --batch_size 8 \
+  --gradient_accumulation_steps 4 \
+  --eval_batch_size 8 \
+  --generation_num_beams 1 \
+  --eval_strategy epoch \
+  --save_strategy epoch \
+  --metric_for_best_model eval_loss \
+  --early_stopping_patience 0 \
+  --top_n_checkpoints 2 \
+  --eval_metrics chrf2pp bleu meteor ter exact_match \
+  --seed 42
+```
+
+The trainer sets `fsdp` to `full_shard auto_wrap` and `fsdp_config` to `{"min_num_params": 1000000}`. Both ranks entered `trainer.train` and Accelerate took the FSDP branch (`prepare_model`, not `_prepare_deepspeed`). The process then exited on 26 Nov 2026 at 13:48:20 UTC on `modelling-l4-2gpus-vm-3`, rank 0 pid 2531504, exit code 1. No step was logged.
+
+Both ranks first printed this warning, twice in the log because each rank prints it:
+
+```text
+You are using an old version of the checkpointing format that is deprecated
+(We will also silently ignore `gradient_checkpointing_kwargs` in case you passed it).
+Please update to the new format on your modeling file. To use the new format,
+you need to completely remove the definition of the method
+`_set_gradient_checkpointing` in your model.
+```
+
+That warning is not the crash. IndicTrans still defines `_set_gradient_checkpointing`, so Transformers ignores the `use_reentrant` argument this repo passes and turns checkpointing on through the old hook. The same warning can show up on the DDP run. DDP still trains.
+
+The crash, on both ranks, is the next frame:
+
+```text
+File "transformers/trainer.py", line 2466, in _inner_training_loop
+    self.model = self.accelerator.prepare(self.model)
+File "accelerate/accelerator.py", line 1937, in prepare_model
+    fsdp_plugin.param_init_fn = ensure_weights_retied(
+        fsdp_plugin.param_init_fn,
+        model,
+        self.device,
+    )
+File "accelerate/utils/fsdp_utils.py", line 540, in ensure_weights_retied
+    mod = model.get_submodule(name)
+File "torch/nn/modules/module.py", line 717, in get_submodule
+    raise AttributeError(
+        mod._get_name() + " has no " "attribute `" + item + "`"
+    )
+AttributeError: IndicTransForConditionalGeneration has no attribute `decoder`
+```
+
+`ensure_weights_retied` walks the names of tied weights and calls `get_submodule` on each one before FSDP shards anything. Those names begin with `decoder`. On `IndicTransForConditionalGeneration` the decoder is not a direct attribute of the top-level module, so `get_submodule("decoder...")` raises. This happens inside `prepare_model`, before the dataloader, the optimizer step, and the first batch.
+
+Nothing in the training command can move that lookup. Batch size, `adamw_torch` versus `adamw_bnb_8bit`, `--fsdp full_shard auto_wrap` versus another strategy string, and `min_num_params` are all applied after the model has been wrapped. This launch never got that far. A second FSDP command on this checkpoint and this Accelerate build hits the same `AttributeError`.
+
+The issue is not solved. FSDP is not a supported way to train this IndicTrans checkpoint here. Making it work would mean changing IndicTrans or Accelerate so the tied-weight names match the real module tree. That is a library change, not another experiment with flags. DDP never calls `ensure_weights_retied`, which is why the same weights train under `--distribution ddp`.
+
 ## Why the other strategies are not next
 
 | Flag | Why it is not this run |
@@ -195,7 +267,7 @@ One watch point remains. Generation at the end of an epoch holds the decoder cac
 | `zero3` | Same import crash. It also slices the 2 GB of weights and gathers each layer from the other GPU while it runs. Those weights already fit, so the extra traffic is wasted. |
 | `offload` | Same import crash, then ZeRO-3 with weights and Adam parked in CPU memory. Every step copies them back. It is the slow path for a GPU that cannot hold the model. These L4s can. |
 | `deepspeed` | Old name. The trainer rewrites it to `zero2` and then hits the same crash. |
-| `fsdp` | Does not import DeepSpeed’s Muon file, so it would not hit this particular `torch.compile` error. It still slices a 2 GB model across GPUs. DDP is faster when each GPU can hold the copy, which this run has shown. FSDP with LoRA is fragile in this repo, and QLoRA is refused. |
+| `fsdp` | Tried. Both ranks reached `prepare_model`, then `ensure_weights_retied` raised `IndicTransForConditionalGeneration has no attribute decoder`. No training step ran. Another FSDP launch repeats that error. QLoRA is also refused with FSDP. See the trial above. |
 | `qlora` with ZeRO or FSDP | Refused on purpose. 4-bit weights stay on one device per GPU. QLoRA is allowed with `auto` and `ddp` only, and this job is a full update, not an adapter. |
 | DataParallel | One process, with GPU 0 doing the extra gather. It is the older multi-GPU path and it breaks QLoRA. `auto` does not use it. |
 | ZeRO-1 | Splits only a slice of the optimizer. Not a separate flag here. Stage 2 is the first ZeRO stage that would matter, and stage 2 does not start on this Python. |

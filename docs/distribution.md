@@ -137,9 +137,9 @@ NVMe is slower than CPU offload. Use it only when CPU RAM is also too small.
 
 QLoRA is allowed with `auto` and `ddp` only. It refuses `zero2`, `zero3`, `offload`, and `fsdp`, because 4-bit weights are not split safely here. Several GPUs means one 4-bit copy on each GPU (DDP), not one model sliced across them.
 
-### `fsdp` — not the usual choice
+### `fsdp` — not supported for this IndicTrans checkpoint
 
-FSDP also slices the model across GPUs. For this repo, DDP is faster when the model fits, and `zero2` is the better memory tool for a full 1B run. FSDP with LoRA is especially fragile. Leave it unused unless you are comparing it on purpose.
+FSDP slices the model across GPUs. It does not load DeepSpeed, so it skips the Python 3.13 Muon crash. A full 1B launch on two L4s still died in Accelerate before the first step: `ensure_weights_retied` looks up a tied weight named `decoder` on `IndicTransForConditionalGeneration`, and that class has no such attribute. The warning about `_set_gradient_checkpointing` printed first and is not the failure. Changing batch size or the FSDP strategy string does not reach those settings. The traceback and the command that was run are in [deepspeed.md](deepspeed.md). QLoRA is refused with FSDP. Use DDP when the copy fits.
 
 `--distribution deepspeed` is the old name for `zero2`. New commands should say `zero2`.
 

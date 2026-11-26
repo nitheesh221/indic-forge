@@ -270,7 +270,7 @@ The training CSV is `eval_metrics.csv`. A bare file name is written under `--out
 | `zero2` | Full fine-tune of the 1B model, and DDP with 8-bit Adam is still out of memory. Set `SAVE_ONLY_MODEL=0`. Install DeepSpeed. On Python 3.13 with DeepSpeed 0.20.1 this flag does not start; see [deepspeed.md](deepspeed.md). |
 | `zero3` | The weights themselves do not fit. Rare for IndicTrans2. The 1B weights are about 2 GB. |
 | `offload` | Last resort. Weights and Adam sit in CPU RAM. It is slow. |
-| `fsdp` | Not the usual choice. DDP is faster when the model fits. `zero2` is the memory tool for a full 1B run. |
+| `fsdp` | Not supported for IndicTrans here. A real 1B launch died with `IndicTransForConditionalGeneration has no attribute decoder` while Accelerate tied weights. No step ran. Details are in [deepspeed.md](deepspeed.md). |
 | `deepspeed` | Old name. It is treated as `zero2`. |
 
 QLoRA allows only `auto` and `ddp`.
