@@ -380,7 +380,7 @@ yarl==1.25.1
 
 You supply the split. `train.py` does not cut one file into train, validation, and test. Pass a train file and a validation file. A third file, if you have one, is scored only by the translate command in section 1. It is never read during training.
 
-Accepted input files: `.json`, `.jsonl`, `.csv`, `.tsv`, `.tab`.
+Accepted input files: `.json`, `.jsonl`.
 
 A JSON file may be an array of objects, one JSON object per line, or one object with a list under a key. The sample file uses a `translation` list. Language tags are read from each row. Leave `--src_lang` and `--tgt_lang` off when the file already has them. Set those flags only to keep one pair, or when a CSV has text columns and no language columns.
 
@@ -389,9 +389,7 @@ Field names, first match wins:
 | Role | Accepted names |
 | --- | --- |
 | Source language | `src_lang`, `source_lang`, `src_code` |
-| Target language | `tgt_lang`, `target_lang`, `tgt_code` |
-| Source text | `src`, `source`, `src_text`, `source_text`, `src_sentence`, `source_sentence`, `sentence_src`, `original` |
-| Target text | `tgt`, `target`, `tgt_text`, `target_text`, `tgt_sentence`, `target_sentence`, `sentence_tgt`, `translation`, `translated` |
+| Target language | `tgt_lang`, `target_lang`, `tgt_code` | 
 
 Tags are FLORES-200 tags (`hin_Deva`, `eng_Latn`) or a short alias (`hi`, `en`). One example row:
 
