@@ -18,7 +18,7 @@ This repo follows the official data layout from [`huggingface_interface/train_lo
 
 GPU is strongly recommended for training. Distilled models can run inference on CPU, slowly. The playground UI does **not** need a GPU until you press Translate.
 
-A student walkthrough of the whole setup (architecture, data, GPUs, models, SFT, PEFT, checkpoints, metrics, and the report) is [docs/guide.md](docs/guide.md).
+A student walkthrough of the whole setup (architecture, data, GPUs, models, SFT, PEFT, checkpoints, metrics, and the report) is [docs/guide.md](docs/guide.md). Each training flag, its effect, and the values the script accepts are in [docs/hyperparameters.md](docs/hyperparameters.md).
 
 ## Recommended setup (research decisions)
 

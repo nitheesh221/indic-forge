@@ -127,7 +127,7 @@ The full explanation, with the papers, is [why-sft.md](why-sft.md).
 
 ## Hyperparameter tuning
 
-Change one knob at a time, and keep a note of the chrF++ and the validation loss. The defaults below are the ones in `train.py` and the shell scripts. They are a starting point, not a searched optimum.
+Change one knob at a time, and keep a note of the chrF++ and the validation loss. The defaults below are the ones in `train.py` and the shell scripts. They are a starting point, not a searched optimum. Every flag, what it does to the update, and the values `train.py` actually accepts are listed in [hyperparameters.md](hyperparameters.md).
 
 | Flag | Starts at | What it does | When you touch it |
 | --- | --- | --- | --- |
