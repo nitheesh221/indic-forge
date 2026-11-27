@@ -459,26 +459,21 @@ A pair is trained only on the matching direction. Bengali→English rows are rej
 The code does not check the compute capability. These are the limits of the precision it actually runs.
 
 For this repo:
-bf16 — yes, that part applies. Your L4 command uses --bf16, so the floor is 8.0+.
+bf16 — yes, that part applies. Your L4 command uses --bf16, so the floor is 8.0+. Also regarding (RTX PRO 6000 12.0) i haven't test rtx machine's because of unavailability but need to use it for large dataset in ml studio.
 flash-attn — no. This trainer does not use flash-attn, so that part of the example does not apply.
 
 Studio image for the tested recipe: Python 3.13.5, driver `535.309.01` or another driver whose `nvidia-smi` CUDA line is at least 12.1, PyTorch `2.5.1+cu121`, cuDNN `9.1.0.70`, and the freeze above. Do not add flash-attn. 
 
 ### Memory and precision
 
-| Run | What fit |
-| --- | --- |
-| LoRA or QLoRA, distilled | One GPU. The adapter is small. The shell default batch is 2. |
-| Full 200M | One 24 GB L4 at batch 32. Batch 64 ran out of memory. The shell default batch is 1, with gradient accumulation 8. |
-| Full 1B | One 24 GB L4 with `--optim adamw_bnb_8bit`, `--bf16`, `--gradient_checkpointing`, and `--batch_size 8`. A second L4 is a second copy, for speed, not extra room. |
-
-DDP does not pool memory. A model that does not fit on one GPU does not fit because a second GPU was added.
 
 Training precision is bf16 on the L4 command. `--bf16` and `--fp16` cannot both be set. Inference on CUDA loads the model in fp16 even when training used bf16. CPU inference uses fp32 and is only practical for a distilled model.
 
 ### Multi-GPU
 
 Supported: DDP, by passing two or more ids in `--gpu_ids`. The default distribution `auto` does that relaunch. `--distribution ddp` is the same path.
+
+Right now, code traces for deepspeed can be visible, but not using/calling right now, 
 
 Generation uses `use_cache=False`. IndicTrans2 beam search crashes if the KV cache is left on. That is not a flag.
 
