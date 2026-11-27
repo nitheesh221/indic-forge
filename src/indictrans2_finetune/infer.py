@@ -87,6 +87,27 @@ def release_inference_model() -> None:
         torch.cuda.empty_cache()
 
 
+def resolve_model_reference(model_name: str) -> str:
+    """Return a Hub id, or the absolute path of a local model folder.
+
+    A folder such as ``OUT2/indic-en-1b/final_model`` is not a Hub repo id.
+    If that folder is missing, Hugging Face rejects the name before it says
+    the path was not found.
+    """
+    raw = model_name.strip()
+    path = Path(raw).expanduser()
+    if path.is_dir():
+        return str(path.resolve())
+    looks_like_path = raw.startswith(("/", ".", "~")) or "\\" in raw or raw.count("/") > 1
+    if looks_like_path:
+        raise SystemExit(
+            f"{raw} is not a model folder. Looked for {path.resolve()}. "
+            "Pass the final_model directory written by training, or a Hub id "
+            "such as ai4bharat/indictrans2-indic-en-1B."
+        )
+    return raw
+
+
 def tokenizer_source(model_name: str) -> str:
     """Use the original Hub tokenizer for a merged full or full_lora directory."""
     path = Path(model_name)
@@ -208,6 +229,7 @@ def _load_model(model_name: str, dtype: torch.dtype):
 
 @lru_cache(maxsize=2)
 def load_pipeline(model_name: str, adapter: str | None = None):
+    model_name = resolve_model_reference(model_name)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source(model_name), trust_remote_code=True)
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     model = _load_model(model_name, dtype)

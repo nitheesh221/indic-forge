@@ -9,6 +9,25 @@ from indictrans2_finetune.cli import app, collapse_eval_metrics
 from indictrans2_finetune.evaluate import evaluate_json, resolve_metrics
 
 
+def test_local_model_path_is_not_sent_to_the_hub_when_missing():
+    from indictrans2_finetune.infer import resolve_model_reference
+
+    with pytest.raises(SystemExit, match="not a model folder"):
+        resolve_model_reference("OUT2/indic-en-1b/final_model")
+
+
+def test_local_model_directory_resolves_to_an_absolute_path(tmp_path, monkeypatch):
+    from indictrans2_finetune.infer import resolve_model_reference
+
+    model_dir = tmp_path / "OUT2" / "indic-en-1b" / "final_model"
+    model_dir.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    assert resolve_model_reference("OUT2/indic-en-1b/final_model") == str(model_dir.resolve())
+    assert resolve_model_reference("ai4bharat/indictrans2-indic-en-1B") == (
+        "ai4bharat/indictrans2-indic-en-1B"
+    )
+
+
 def test_scoring_forgets_the_torchrun_world(monkeypatch):
     import os
 
