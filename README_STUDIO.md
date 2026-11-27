@@ -458,17 +458,11 @@ A pair is trained only on the matching direction. Bengali→English rows are rej
 
 The code does not check the compute capability. These are the limits of the precision it actually runs.
 
-| Precision | Where | Minimum capability | Why |
-| --- | --- | --- | --- |
-| bf16 | Training, when `--bf16` is set. This is the L4 recipe. | 8.0 | bf16 tensor cores start with Ampere. |
-| fp16 | Training, when `--fp16` is set instead. Inference always loads fp16 on CUDA. | 7.0 | fp16 tensor cores exist on T4 (7.5). |
-| eager attention | Training and inference | none beyond the precision above | `attn_implementation="eager"`. flash-attn is not used, so its 8.0 requirement does not apply. |
+For this repo:
+bf16 — yes, that part applies. Your L4 command uses --bf16, so the floor is 8.0+.
+flash-attn — no. This trainer does not use flash-attn, so that part of the example does not apply.
 
-| GPU | Capability | This recipe |
-| --- | --- | --- |
-| L4 | 8.9 | Tested. Two cards, 23,034 MiB each. |
-
-Studio image for the tested recipe: Python 3.13.5, driver `535.309.01` or another driver whose `nvidia-smi` CUDA line is at least 12.1, PyTorch `2.5.1+cu121`, cuDNN `9.1.0.70`, and the freeze above. Do not add flash-attn. Do not make DeepSpeed a required build.
+Studio image for the tested recipe: Python 3.13.5, driver `535.309.01` or another driver whose `nvidia-smi` CUDA line is at least 12.1, PyTorch `2.5.1+cu121`, cuDNN `9.1.0.70`, and the freeze above. Do not add flash-attn. 
 
 ### Memory and precision
 
