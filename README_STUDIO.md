@@ -137,7 +137,9 @@ python train.py \
 
 `--distribution` is omitted on purpose. `--gpu_ids 0,1` makes `auto` relaunch under `torchrun` as DDP. If validation generation runs out of memory while the training step fits, keep `--batch_size 8` and set `--eval_batch_size 4`.
 
-The shell wrappers `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, and `scripts/train_full.sh` pass every flag. Override them with environment variables of the same name in upper case, for example `GPU_IDS=0,1 BATCH_SIZE=8 bash scripts/train_full.sh`. Their default model is the English→Indic distilled 200M checkpoint, not the 1B Indic→English checkpoint above.
+For more commands, please refer `commands.txt` 
+
+If you want to use shell wrappers `scripts/train_lora.sh`, `scripts/train_qlora.sh`, `scripts/train_full_lora.sh`, and `scripts/train_full.sh` pass every flag. Override them with environment variables of the same name in upper case, for example `GPU_IDS=0,1 BATCH_SIZE=8 bash scripts/train_full.sh`. Their default model is the English→Indic distilled 200M checkpoint, not the 1B Indic→English checkpoint above.
 
 Continue a saved LoRA adapter by passing `--adapter_path it2_out/lora/final_model` with `--train_mode lora` or `qlora`. `--train_mode full` with `--adapter_path` merges that adapter into the base model and then trains every weight.
 
