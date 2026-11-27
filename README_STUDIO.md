@@ -589,74 +589,74 @@ These are the scores in `eval_metrics.csv` and, for a held-out file, in `inferen
 
 Levels: **Basic** is shown on every run, **Advanced** is behind “Show advanced options”, **Expert** is rarely changed.
 
-**Allowed** is what the code accepts. A flag with a fixed list rejects every other string. A number with no list accepts any value of that type, inside the limits written as “Code”. “Usual” is the range used for this model. The parser does not reject a number just because it is outside Usual.
+A parenthetical list is the only set the parser accepts. A numeric range is the range to offer in Studio. The parser still accepts any number of that type outside the range, except where the cell says the code rejects it.
 
-`train.py` defaults are below. The shell scripts override some of them: LoRA and QLoRA use batch 2 and accumulation 4; full and full-LoRA use batch 1, accumulation 8, learning rate `2e-5`, and 8-bit Adam. A shell value is noted in the Default cell when it differs.
+`train.py` defaults are below. The shell scripts override some of them: LoRA and QLoRA use batch 2 and accumulation 4; full and full-LoRA use batch 1, accumulation 8, learning rate `2e-5`, and 8-bit Adam.
 
 ### Training
 
-| Name | What it does | Default | Allowed | Level | Depends on |
+| Name | What it does | Default | Allowed range / values | Level | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| `--model_hf_id` | Hub id of the base checkpoint. Also selects the translation direction. | required | Only these six: `ai4bharat/indictrans2-en-indic-dist-200M`, `ai4bharat/indictrans2-en-indic-1B`, `ai4bharat/indictrans2-indic-en-dist-200M`, `ai4bharat/indictrans2-indic-en-1B`, `ai4bharat/indictrans2-indic-indic-dist-320M`, `ai4bharat/indictrans2-indic-indic-1B` | Basic | |
-| `--train_mode` | Which weights move. | `lora` | Only `full`, `full_lora`, `lora`, `qlora`. `full_qlora` is rejected. | Basic | |
-| `--train_json` | Train file. | none | Path ending in `.json`, `.jsonl`, `.csv`, `.tsv`, or `.tab` | Basic | omitted when `--data_dir` is set |
-| `--val_json` | Validation file. | none | Same types as `--train_json` | Basic | omitted when `--data_dir` is set |
-| `--output_dir` | Checkpoints, CSVs, and the report. | `./it2_out/exp` | Any path | Basic | |
-| `--epochs` | Number of passes over the training file. | `2` | Code: any integer. Usual: `1`, `2`, `3`, `5`, `8`, `10`. The 1B run used `8`. | Basic | |
-| `--learning_rate` | Adam step size. | `2e-4` for `lora` and `qlora`, `2e-5` for `full` and `full_lora` | Code: any float. Usual for `lora` and `qlora`: `1e-4`, `2e-4`, `3e-4`, `5e-4`. Usual for `full` and `full_lora`: `1e-5`, `2e-5`, `3e-5`, `5e-5`. | Basic | |
-| `--batch_size` | Sentences on one GPU per forward. | `2` in `train.py`, LoRA, and QLoRA. `1` in the full scripts. The 1B run used `8`. | Code: any integer. Usual: `1`, `2`, `4`, `8`, `16`, `32`. A full 200M update ran out of memory at `64` on one 24 GB L4. | Basic | |
-| `--gpu_ids` | Which GPUs to use. Two or more ids turn `auto` into DDP. | none (one process, no pin) | Code: comma-separated digits. On these L4s: `0` or `0,1`. | Basic | do not pass it if you already launched `torchrun` |
-| `--bf16` | Train in bfloat16. | off in `train.py`. On in the shell scripts unless `BF16=0`. | On or off | Basic | cannot be combined with `--fp16`. Needs compute capability 8.0+. |
-| `--gradient_accumulation_steps` | Forwards added before one optimizer step. | `4` in `train.py`. `8` in the full scripts. The 1B run used `4`. | Code: any integer. Usual: `1`, `2`, `4`, `8`, `16`. | Advanced | effective batch = this × `--batch_size` × GPU count |
-| `--eval_batch_size` | Sentences per GPU during validation generation. | `2`. The 1B run used `8`. | Code: any integer. Usual: `1`, `2`, `4`, `8`. | Advanced | drop to `4` if only evaluation runs out of memory |
-| `--optim` | Optimizer implementation. | `adamw_torch`, or `paged_adamw_32bit` for `qlora`. Full scripts pass `adamw_bnb_8bit`. | Only `adamw_torch`, `adamw_torch_fused`, `adamw_hf`, `adamw_bnb_8bit`, `paged_adamw_8bit`, `paged_adamw_32bit`, `adafactor` | Advanced | `adamw_bnb_8bit` needs bitsandbytes. That is the optimizer that fit the 1B model. |
-| `--gradient_checkpointing` | Recompute activations to save memory. | off in `train.py`. On in the shell scripts unless `GRADIENT_CHECKPOINTING=0`. | On or off | Advanced | required for the 1B full run on 24 GB |
-| `--fp16` | Train in float16. | off | On or off | Advanced | cannot be combined with `--bf16`. Use this below compute capability 8.0. |
-| `--max_length` | Tokens kept on the source and on the target. | `256` | Code: any integer. Usual: `128` or `256`. `256` is the IndicTrans2 window. | Advanced | |
-| `--eval_strategy` | When validation runs. | `epoch` | Only `epoch`, `steps`, `no` | Advanced | |
-| `--save_strategy` | When a checkpoint is written. | `epoch` | Only `epoch`, `steps`, `no` | Advanced | must match `--eval_strategy` for early stopping and for `final_model` to be the best checkpoint |
-| `--eval_metrics` | Translation scores written at evaluation. They do not pick the checkpoint. | all seven | One or more of only `chrf2pp`, `comet`, `bleu`, `bertscore`, `meteor`, `ter`, `exact_match` | Advanced | `comet` and `bertscore` download extra models |
-| `--metric_for_best_model` | Score that ranks checkpoints and early stopping. | `eval_loss` | Only `eval_loss`, `eval_entropy`, `eval_mean_token_accuracy` | Advanced | |
-| `--early_stopping_patience` | Stop after this many evaluations with no improvement. | `3`. The 1B run set `0`. | Code: integer ≥ 0. Usual: `0`, `1`, `2`, `3`, `5`. | Advanced | needs eval and save strategies to match, and neither may be `no` |
-| `--src_lang` | Keep only this source language. | none (every pair that matches the checkpoint) | Only the FLORES tags and aliases in section 2. Any other string is rejected. | Advanced | |
-| `--tgt_lang` | Keep only this target language. | none | Same closed list as `--src_lang` | Advanced | the pair must match the checkpoint direction |
-| `--final_model_dir` | Where the weights to keep are written. | `<output_dir>/final_model` | Any path | Advanced | |
-| `--lora_r` | LoRA rank. | `8` | Code: any integer. Usual: `4`, `8`, `16`, `32`, `64`. | Advanced | ignored when `--train_mode full` |
-| `--lora_alpha` | LoRA scale. | `16` | Code: any integer. Usual: twice the rank (`8`, `16`, `32`, `64`, `128`). | Advanced | ignored when `--train_mode full` |
-| `--lora_dropout` | Dropout on the adapter. | `0.05` | Code: any float. Usual: `0`, `0.05`, `0.1`. | Advanced | ignored when `--train_mode full` |
-| `--lora_target_modules` | Modules that receive an adapter. | `q_proj,k_proj`. `full_lora` uses `q_proj,k_proj,v_proj,out_proj,fc1,fc2`. | Code: any comma-separated names. The layers this repo uses are `q_proj`, `k_proj`, `v_proj`, `out_proj`, `fc1`, `fc2`. | Advanced | ignored when `--train_mode full` |
-| `--generation_num_beams` | Beam width while scoring the validation file during training. | `5`. The 1B run used `1`. | Code: any integer. Usual: `1`, `2`, `4`, `5`. | Advanced | |
-| `--eval_steps` | Evaluations every this many steps. | `50` | Code: any integer. Usual: `50`, `100`, `200`, `500`. | Advanced | used when `--eval_strategy steps` |
-| `--save_steps` | Checkpoints every this many steps. | `500` | Code: any integer. Usual: `100`, `500`, `1000`. | Advanced | used when `--save_strategy steps` |
-| `--eval_max_new_tokens` | Maximum generated length during validation. | `256` | Code: any integer. Usual: `64`, `128`, `256`. | Advanced | |
-| `--top_n_checkpoints` | How many best checkpoints to keep. | `3` | Code: any integer. Usual: `1`, `2`, `3`, `5`. | Advanced | |
-| `--last_k_checkpoints` | How many newest checkpoints to keep as well. | `2` | Code: any integer. Usual: `1`, `2`, `3`. | Advanced | |
-| `--save_only_model` | Checkpoint stores weights and not the optimizer. | off in `train.py`. On in the full scripts unless `SAVE_ONLY_MODEL=0`. | On or off | Advanced | a resume then reloads weights only |
-| `--data_dir` | Official layout already on disk. Skips JSON conversion. | none | A path with `train/` and `dev/` pair folders | Advanced | replaces `--train_json` and `--val_json` |
-| `--adapter_path` | Start from this saved adapter. | none | A directory that contains `adapter_config.json`, or omitted | Advanced | `lora` and `qlora` keep training it. `full` merges it, then trains every weight. |
-| `--resume_from_checkpoint` | Continue a stopped run. | none | A `checkpoint-<step>` directory, or omitted | Advanced | |
-| `--seed` | Random seed. | `42` | Code: any integer. Usual: `42`. | Expert | |
-| `--weight_decay` | AdamW weight decay. | `0.01` | Code: any float. Usual: `0`, `0.01`, `0.1`. | Expert | |
-| `--warmup_ratio` | Fraction of steps used to warm up the learning rate. | `0.03` | Code: any float. Usual: `0`, `0.03`, `0.05`, `0.06`, `0.1`. | Expert | |
-| `--lr_scheduler_type` | Learning-rate schedule. | `cosine` | Only `linear`, `cosine`, `cosine_with_restarts`, `polynomial`, `constant`, `constant_with_warmup`, `inverse_sqrt` | Expert | |
-| `--max_grad_norm` | Gradient clipping. | `1.0` | Code: any float. Usual: `0.5`, `1.0`. | Expert | |
-| `--label_smoothing_factor` | Label smoothing on the translation loss. | `0.1` | Code: float in `[0, 1)`. Usual: `0` or `0.1`. | Expert | |
-| `--logging_steps` | How often a loss line is written. | `50` | Code: any integer. Usual: `10`, `25`, `50`, `100`. | Expert | |
-| `--distribution` | `auto` follows `--gpu_ids`. `ddp` is the same multi-GPU path written out. | `auto` | Only `auto`, `ddp` | Expert | one GPU id stays a single process either way |
-| `--ddp_timeout` | Seconds a rank waits for the others. | `14400` | Code: integer ≥ 1. Usual: `1800`, `3600`, `7200`, `14400`. | Expert | |
-| `--num_workers` | Data-loader worker processes. | `4` | Code: any integer. Usual: `0`, `2`, `4`, `8`. | Expert | |
-| `--eval_accumulation_steps` | Evaluation batches gathered before metric tensors move. | `1` | Code: any integer. Usual: `1`, `2`, `4`, `8`. | Expert | |
-| `--early_stopping_threshold` | Smallest metric move that counts as an improvement. | `0.0` | Code: float ≥ 0. Usual: `0`, `0.001`, `0.01`. | Expert | used when patience is above 0 |
-| `--save_total_limit` | Extra cap on the top-K plus last-K union. | `0` (no extra cap) | Code: any integer. `0` means no extra cap. Usual: `0`, `2`, `3`, `5`. | Expert | |
-| `--bnb_compute_dtype` | Compute dtype inside 4-bit QLoRA. | `bfloat16` | Only `float16`, `bfloat16` | Expert | `--train_mode qlora` |
-| `--bnb_4bit_quant_type` | 4-bit storage type. | `nf4` | Only `nf4`, `fp4` | Expert | `--train_mode qlora` |
-| `--bnb_4bit_use_double_quant` | Also quantize the quantization constants. | off | On or off | Expert | `--train_mode qlora` |
-| `--model_id` | Local weights or a hub id to load. The direction still comes from `--model_hf_id`. | the value of `--model_hf_id` | A hub id or a local directory | Expert | |
-| `--report_to` | Live logger besides the CSVs. | `none` | Only `none`, `tensorboard` | Expert | |
-| `--write_rca` / `--no-write_rca` | Write `rca_report.html` after training. | on | On or off | Expert | |
-| `--eval_metrics_csv` | Validation metric file name. | `eval_metrics.csv` | A file name or a path | Expert | |
-| `--eval_samples_csv` | Validation sentence file name. | `eval_samples.csv` | A file name or a path | Expert | |
-| `--training_logs_csv` | Training log file name. | `training_logs.csv` | A file name or a path | Expert | |
+| `--model_hf_id` | Hub id of the base checkpoint. Also selects the translation direction. | required | (`ai4bharat/indictrans2-en-indic-dist-200M`, `ai4bharat/indictrans2-en-indic-1B`, `ai4bharat/indictrans2-indic-en-dist-200M`, `ai4bharat/indictrans2-indic-en-1B`, `ai4bharat/indictrans2-indic-indic-dist-320M`, `ai4bharat/indictrans2-indic-indic-1B`) | Basic | Language pair |
+| `--train_mode` | Which weights move. | `lora` | (`full`, `full_lora`, `lora`, `qlora`) | Basic | GPU memory |
+| `--train_json` | Train file. | none | A `.json`, `.jsonl`, `.csv`, `.tsv`, or `.tab` path | Basic | Data split |
+| `--val_json` | Validation file. | none | Same file types as `--train_json` | Basic | `--train_json` |
+| `--output_dir` | Checkpoints, CSVs, and the report. | `./it2_out/exp` | Any path | Basic | Run name |
+| `--epochs` | Passes over the training file. | `2` | 1–10 (usual: 1, 2, 3, 5, 8, 10) | Basic | Dataset size, early stopping |
+| `--learning_rate` | Adam step size. | `2e-4` for `lora` and `qlora`; `2e-5` for `full` and `full_lora` | LoRA/QLoRA 1e-4–5e-4 (usual: 1e-4, 2e-4, 3e-4, 5e-4). Full and full-LoRA 1e-5–5e-5 (usual: 1e-5, 2e-5, 3e-5, 5e-5). | Basic | `--train_mode`, batch size |
+| `--batch_size` | Sentences on one GPU per forward. | `2` for LoRA and QLoRA; `1` for full and full-LoRA. The 1B run used `8`. | 1–32 (usual: 1, 2, 4, 8, 16, 32) | Basic | GPU memory, `--max_length`, `--train_mode` |
+| `--gpu_ids` | Which GPUs to use. Two or more ids turn `auto` into DDP. | none | (`0`, `0,1`) on these two L4s. Code: comma-separated digits. | Basic | Visible GPUs. Omit if already launched with torchrun. |
+| `--bf16` | Train in bfloat16. | off in `train.py`; on in the shell scripts | (on, off) | Basic | Compute capability 8.0+. Not with `--fp16`. |
+| `--gradient_accumulation_steps` | Forwards added before one optimizer step. | `4`; full scripts use `8` | 1–16 (usual: 1, 2, 4, 8, 16) | Advanced | `--batch_size`, GPU count |
+| `--eval_batch_size` | Sentences per GPU during validation generation. | `2`. The 1B run used `8`. | 1–8 (usual: 1, 2, 4, 8) | Advanced | GPU memory, `--generation_num_beams` |
+| `--optim` | Optimizer implementation. | `adamw_torch`; `paged_adamw_32bit` for `qlora`; full scripts use `adamw_bnb_8bit` | (`adamw_torch`, `adamw_torch_fused`, `adamw_hf`, `adamw_bnb_8bit`, `paged_adamw_8bit`, `paged_adamw_32bit`, `adafactor`) | Advanced | `--train_mode`, GPU memory |
+| `--gradient_checkpointing` | Recompute activations to save memory. | off in `train.py`; on in the shell scripts | (on, off) | Advanced | GPU memory. Needed for full 1B on 24 GB. |
+| `--fp16` | Train in float16. | off | (on, off) | Advanced | Compute capability below 8.0. Not with `--bf16`. |
+| `--max_length` | Tokens kept on the source and on the target. | `256` | 64–256 (usual: 128, 256) | Advanced | GPU memory. 256 is the IndicTrans2 window. |
+| `--eval_strategy` | When validation runs. | `epoch` | (`epoch`, `steps`, `no`) | Advanced | `--save_strategy` |
+| `--save_strategy` | When a checkpoint is written. | `epoch` | (`epoch`, `steps`, `no`) | Advanced | `--eval_strategy` |
+| `--eval_metrics` | Translation scores written at evaluation. They do not pick the checkpoint. | all seven | One or more of (`chrf2pp`, `comet`, `bleu`, `bertscore`, `meteor`, `ter`, `exact_match`) | Advanced | `--eval_strategy` |
+| `--metric_for_best_model` | Score that ranks checkpoints and early stopping. | `eval_loss` | (`eval_loss`, `eval_entropy`, `eval_mean_token_accuracy`) | Advanced | `--eval_strategy`, `--save_strategy` |
+| `--early_stopping_patience` | Stop after this many evaluations with no improvement. | `3`. The 1B run used `0`. | 0–10 (usual: 0, 1, 2, 3, 5). Code rejects negatives. | Advanced | `--metric_for_best_model`. Eval and save strategies must match and must not be `no`. |
+| `--src_lang` | Keep only this source language. | none | The FLORES tags and aliases in section 2 | Advanced | `--model_hf_id` direction |
+| `--tgt_lang` | Keep only this target language. | none | The same closed list as `--src_lang` | Advanced | `--src_lang`, `--model_hf_id` direction |
+| `--final_model_dir` | Where the weights to keep are written. | `<output_dir>/final_model` | Any path | Advanced | `--output_dir` |
+| `--lora_r` | LoRA rank. | `8` | 4–64 (usual: 4, 8, 16, 32, 64) | Advanced | `--train_mode` is `lora`, `qlora`, or `full_lora` |
+| `--lora_alpha` | LoRA scale. | `16` | 8–128 (usual: 8, 16, 32, 64, 128). Keep it at twice `--lora_r`. | Advanced | `--lora_r` |
+| `--lora_dropout` | Dropout on the adapter. | `0.05` | 0.0–0.2 (usual: 0, 0.05, 0.1) | Advanced | `--train_mode` is not `full` |
+| `--lora_target_modules` | Modules that receive an adapter. | `q_proj,k_proj`. `full_lora` uses all six. | (`q_proj`, `k_proj`, `v_proj`, `out_proj`, `fc1`, `fc2`), comma-separated | Advanced | `--train_mode` is not `full` |
+| `--generation_num_beams` | Beam width while scoring the validation file during training. | `5`. The 1B run used `1`. | 1–5 (usual: 1, 2, 4, 5) | Advanced | `--eval_strategy`, GPU memory |
+| `--eval_steps` | Evaluations every this many steps. | `50` | 10–1000 (usual: 50, 100, 200, 500) | Advanced | `--eval_strategy steps` |
+| `--save_steps` | Checkpoints every this many steps. | `500` | 50–2000 (usual: 100, 500, 1000) | Advanced | `--save_strategy steps` |
+| `--eval_max_new_tokens` | Maximum generated length during validation. | `256` | 16–256 (usual: 64, 128, 256) | Advanced | `--max_length` |
+| `--top_n_checkpoints` | How many best checkpoints to keep. | `3` | 1–10 (usual: 1, 2, 3, 5) | Advanced | `--save_strategy` |
+| `--last_k_checkpoints` | How many newest checkpoints to keep as well. | `2` | 0–5 (usual: 1, 2, 3) | Advanced | `--save_strategy`, `--top_n_checkpoints` |
+| `--save_only_model` | Checkpoint stores weights and not the optimizer. | off in `train.py`; on in the full scripts | (on, off) | Advanced | Resume |
+| `--data_dir` | Official layout already on disk. Skips JSON conversion. | none | A path with `train/` and `dev/` pair folders | Advanced | Replaces `--train_json` and `--val_json` |
+| `--adapter_path` | Start from this saved adapter. | none | A directory with `adapter_config.json`, or omitted | Advanced | `--train_mode` |
+| `--resume_from_checkpoint` | Continue a stopped run. | none | A `checkpoint-<step>` directory, or omitted | Advanced | A previous checkpoint, `--save_only_model` |
+| `--seed` | Random seed. | `42` | Any integer (usual: 1, 42, 1234) | Expert | |
+| `--weight_decay` | AdamW weight decay. | `0.01` | 0.0–0.2 (usual: 0, 0.001, 0.01, 0.05, 0.1) | Expert | Optimizer |
+| `--warmup_ratio` | Fraction of steps used for LR warmup. | `0.03` | 0.0–0.20 (usual: 0.03, 0.05, 0.06, 0.1) | Expert | Total training steps |
+| `--lr_scheduler_type` | Learning-rate schedule. | `cosine` | (`linear`, `cosine`, `cosine_with_restarts`, `polynomial`, `constant`, `constant_with_warmup`, `inverse_sqrt`) | Expert | Learning rate, warmup |
+| `--max_grad_norm` | Gradient clipping. | `1.0` | 0.0–5.0 (usual: 0.5, 1.0) | Expert | Optimizer |
+| `--label_smoothing_factor` | Label smoothing on the translation loss. | `0.1` | 0.0–0.2 (usual: 0, 0.1). Code rejects values outside `[0, 1)`. | Expert | Training loss |
+| `--logging_steps` | How often a loss line is written. | `50` | 1–500 (usual: 10, 25, 50, 100) | Expert | |
+| `--distribution` | `auto` follows `--gpu_ids`. `ddp` is the same multi-GPU path. | `auto` | (`auto`, `ddp`) | Expert | `--gpu_ids` |
+| `--ddp_timeout` | Seconds a rank waits for the others. | `14400` | 60–86400 (usual: 1800, 3600, 7200, 14400). Code rejects values below 1. | Expert | Multi-GPU |
+| `--num_workers` | Data-loader worker processes. | `4` | 0–16 (usual: 0, 2, 4, 8) | Expert | CPU cores |
+| `--eval_accumulation_steps` | Evaluation batches gathered before metric tensors move. | `1` | 1–16 (usual: 1, 2, 4, 8) | Expert | `--eval_batch_size`, GPU memory |
+| `--early_stopping_threshold` | Smallest metric move that counts as an improvement. | `0.0` | 0.0–1.0 (usual: 0, 0.001, 0.01). Code rejects negatives. | Expert | `--early_stopping_patience` |
+| `--save_total_limit` | Extra cap on the top-K plus last-K union. `0` means no extra cap. | `0` | 0–10 (usual: 0, 2, 3, 5) | Expert | `--top_n_checkpoints`, `--last_k_checkpoints` |
+| `--bnb_compute_dtype` | Compute dtype inside 4-bit QLoRA. | `bfloat16` | (`float16`, `bfloat16`) | Expert | `--train_mode qlora` |
+| `--bnb_4bit_quant_type` | 4-bit storage type. | `nf4` | (`nf4`, `fp4`) | Expert | `--train_mode qlora` |
+| `--bnb_4bit_use_double_quant` | Also quantize the quantization constants. | off | (on, off) | Expert | `--train_mode qlora` |
+| `--model_id` | Local weights or a hub id to load. Direction still comes from `--model_hf_id`. | the value of `--model_hf_id` | A hub id or a local directory | Expert | `--model_hf_id` |
+| `--report_to` | Live logger besides the CSVs. | `none` | (`none`, `tensorboard`) | Expert | |
+| `--write_rca` / `--no-write_rca` | Write `rca_report.html` after training. | on | (on, off) | Expert | The training CSVs |
+| `--eval_metrics_csv` | Validation metric file name. | `eval_metrics.csv` | A file name or a path | Expert | `--output_dir` |
+| `--eval_samples_csv` | Validation sentence file name. | `eval_samples.csv` | A file name or a path | Expert | `--output_dir` |
+| `--training_logs_csv` | Training log file name. | `training_logs.csv` | A file name or a path | Expert | `--output_dir` |
 
 `full_qlora` is rejected. There is no `--train_method` flag. Training is supervised translation only.
 
@@ -666,23 +666,23 @@ Shell environment names are the flag names in upper case: `MODEL_HF_ID`, `TRAIN_
 
 These are flags of `python -m indictrans2_finetune.cli translate`. Hyphens, not underscores.
 
-| Name | What it does | Default | Allowed | Level | Depends on |
+| Name | What it does | Default | Allowed range / values | Level | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| `--json-file` | Score a train-style JSON file. `tgt_text` is the reference. | none | path | Basic | not together with `--text` or `--file` |
-| `--text` | Translate one sentence and print it. | none | string | Basic | requires `--src-lang` and `--tgt-lang` |
-| `--file` | Translate a text file, one sentence per line. | none | path | Basic | requires `--src-lang` and `--tgt-lang` |
-| `--model` | Merged model directory, or the base hub id when an adapter is used. | the hub id implied by the language pair | hub id or directory | Basic | |
-| `--adapter` | LoRA or QLoRA directory. | none | directory with `adapter_config.json` | Basic | required for `lora` and `qlora`. Omit it for `full` and `full_lora`. |
-| `--src-lang` | Source language for `--text` and `--file`. Optional filter for `--json-file`. | none | Only the FLORES tags and aliases in section 2 | Basic | required with `--text` or `--file` |
-| `--tgt-lang` | Target language for `--text` and `--file`. Optional filter for `--json-file`. | none | Same closed list as `--src-lang` | Basic | required with `--text` or `--file` |
-| `--eval-metrics` | Metrics to write for a JSON file. | none (no scores) | One or more of only `chrf2pp`, `comet`, `bleu`, `bertscore`, `meteor`, `ter`, `exact_match` | Basic | `--json-file` |
-| `--predictions-csv` | Per-sentence output. | `inference_predictions.csv` | path | Advanced | `--json-file` |
-| `--metrics-csv` | Corpus scores. | `inference_metrics.csv` | path | Advanced | `--json-file` |
-| `--max-length` | Maximum generated length. | `256` | Code: any integer. Usual: `128` or `256`. | Advanced | |
-| `--num-beams` | Beam width. | `5` | Code: any integer. Usual: `1`, `2`, `4`, `5`. | Advanced | |
-| `--batch-size` | Sentences per generate call, per GPU. | `8` | Code: any integer. Usual: `1`, `2`, `4`, `8`, `16`, `32`. | Advanced | |
-| `--gpu-ids` | Split the file across these GPUs. | none (one GPU) | comma-separated indexes, such as `0,1` | Advanced | |
-| `--visualize` | Write an HTML chart page. | off | flag | Advanced | `--json-file` |
-| `--report-html` | Path for that chart page. | `inference_report.html` next to the metrics CSV | path | Expert | implies `--visualize` |
+| `--json-file` | Score a train-style JSON file. `tgt_text` is the reference. | none | A train-style JSON path | Basic | Not together with `--text` or `--file` |
+| `--text` | Translate one sentence and print it. | none | Any string | Basic | `--src-lang`, `--tgt-lang` |
+| `--file` | Translate a text file, one sentence per line. | none | A text path | Basic | `--src-lang`, `--tgt-lang` |
+| `--model` | Merged model directory, or the base hub id when an adapter is used. | the hub id implied by the language pair | A hub id or a directory | Basic | `--adapter` for LoRA and QLoRA |
+| `--adapter` | LoRA or QLoRA directory. | none | A directory with `adapter_config.json`, or omitted | Basic | `--train_mode` was `lora` or `qlora` |
+| `--src-lang` | Source language for `--text` and `--file`. Optional filter for `--json-file`. | none | The FLORES tags and aliases in section 2 | Basic | `--text` or `--file` |
+| `--tgt-lang` | Target language for `--text` and `--file`. Optional filter for `--json-file`. | none | The same closed list as `--src-lang` | Basic | `--src-lang` |
+| `--eval-metrics` | Metrics to write for a JSON file. | none | One or more of (`chrf2pp`, `comet`, `bleu`, `bertscore`, `meteor`, `ter`, `exact_match`) | Basic | `--json-file` |
+| `--predictions-csv` | Per-sentence output. | `inference_predictions.csv` | A file name or a path | Advanced | `--json-file` |
+| `--metrics-csv` | Corpus scores. | `inference_metrics.csv` | A file name or a path | Advanced | `--json-file`, `--eval-metrics` |
+| `--max-length` | Maximum generated length. | `256` | 64–256 (usual: 128, 256) | Advanced | GPU memory |
+| `--num-beams` | Beam width. | `5` | 1–5 (usual: 1, 2, 4, 5) | Advanced | GPU memory |
+| `--batch-size` | Sentences per generate call, per GPU. | `8` | 1–32 (usual: 1, 2, 4, 8, 16, 32) | Advanced | GPU memory, `--num-beams` |
+| `--gpu-ids` | Split the file across these GPUs. | none | (`0`, `0,1`) on these two L4s | Advanced | Visible GPUs |
+| `--visualize` | Write an HTML chart page. | off | (on, off) | Advanced | `--json-file` |
+| `--report-html` | Path for that chart page. | `inference_report.html` next to the metrics CSV | Any path | Expert | `--visualize` |
 
 `--local-rank` is set by `torchrun`. Do not set it in Studio.
