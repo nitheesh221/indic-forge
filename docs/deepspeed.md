@@ -2,7 +2,7 @@
 
 This page records the Indic-to-English 1B full fine-tune on two NVIDIA L4 GPUs (about 23–24 GB each), the errors that stopped ZeRO, the FSDP trial that was launched and did not train, and why those flags are the wrong tool once DDP already fits.
 
-The short version: DeepSpeed is installed and the `zero2` / `zero3` / `offload` flags are still in the trainer. On this machine they do not start. `fsdp` does start wrapping the model, then dies because IndicTrans has no top-level `decoder` attribute. That trial did not produce a training step, and another FSDP command will not. DDP with 8-bit Adam does train, at batch 8. Stay on that run.
+The short version: `zero2`, `zero3`, `offload`, `fsdp`, and the old name `deepspeed` are no longer accepted by `train.py`. ZeRO did not start on Python 3.13. FSDP died while wrapping IndicTrans, before a step. DDP with 8-bit Adam did train, at batch 8. This page is the record of those runs. The trainer now keeps `auto` and `ddp` only.
 
 The flag guide is [distribution.md](distribution.md). This page is the incident record for the 1B L4 job.
 
@@ -101,13 +101,13 @@ You are using an untested ZeRO Optimizer. Please add
 
 Setting that flag is the wrong fix. ZeRO shards every tensor in the optimizer state. 8-bit Adam also keeps small quantization tables. Sharding those tables makes the state unrestorable. The 8-bit optimizer is how DDP fits on one 24 GB card. ZeRO cannot use that optimizer. ZeRO’s supported optimizer is full `adamw_torch`, which is the large state DDP just avoided.
 
-On `main` after `a0c7bbd`, a ZeRO run rewrites `adamw_bnb_8bit`, `paged_adamw_8bit`, and `paged_adamw_32bit` to `adamw_torch` and prints a note. That code never ran on this machine. See the next section.
+On `main` after `a0c7bbd`, a ZeRO run used to rewrite `adamw_bnb_8bit`, `paged_adamw_8bit`, and `paged_adamw_32bit` to `adamw_torch` and print a note. That code never ran on this machine, and the ZeRO flags were removed afterward. See the next section.
 
 ## What was tried
 
 ### 1. A workaround in the trainer
 
-`af7e372` and `e61332d` on `main` do two things before `trainer.train` when the distribution is `zero2`, `zero3`, or `offload`:
+`af7e372` and `e61332d` on `main` added two steps before `trainer.train` when the distribution was `zero2`, `zero3`, or `offload`. Those flags, and this workaround, were removed later. The trainer accepts `auto` and `ddp` only. The steps were:
 
 - On Python 3.13, replace `torch.compile` and `torch.compiler.compile` with a decorator that returns the original function. DeepSpeed looks up `torch.compile` at decoration time. Replacing only `torch.compile` is not enough, because `torch.compiler.compile` keeps its own reference. The log line for this path is `Python 3.13: ZeRO imports without torch.compile.`
 - Force `adamw_torch` so ZeRO is handed a class it can shard.
@@ -266,20 +266,13 @@ The issue is not solved. FSDP is not a supported way to train this IndicTrans ch
 | `zero2` | Same DeepSpeed initialize path, so the same Python 3.13 import crash. After that crash is fixed it still cannot use the 8-bit Adam that made DDP fit. It would shard full Adam across the two L4s and add communication the fitted DDP run does not need. Checkpoints must keep the optimizer (`--save_only_model` has to stay off) or ZeRO cannot reload the best epoch. |
 | `zero3` | Same import crash. It also slices the 2 GB of weights and gathers each layer from the other GPU while it runs. Those weights already fit, so the extra traffic is wasted. |
 | `offload` | Same import crash, then ZeRO-3 with weights and Adam parked in CPU memory. Every step copies them back. It is the slow path for a GPU that cannot hold the model. These L4s can. |
-| `deepspeed` | Old name. The trainer rewrites it to `zero2` and then hits the same crash. |
+| `deepspeed` | Old name for `zero2`. It entered the same DeepSpeed initialize path and hit the same crash. |
 | `fsdp` | Tried. Both ranks reached `prepare_model`, then `ensure_weights_retied` raised `IndicTransForConditionalGeneration has no attribute decoder`. No training step ran. Another FSDP launch repeats that error. QLoRA is also refused with FSDP. See the trial above. |
 | `qlora` with ZeRO or FSDP | Refused on purpose. 4-bit weights stay on one device per GPU. QLoRA is allowed with `auto` and `ddp` only, and this job is a full update, not an adapter. |
 | DataParallel | One process, with GPU 0 doing the extra gather. It is the older multi-GPU path and it breaks QLoRA. `auto` does not use it. |
 | ZeRO-1 | Splits only a slice of the optimizer. Not a separate flag here. Stage 2 is the first ZeRO stage that would matter, and stage 2 does not start on this Python. |
 | Tensor or pipeline parallelism | Those cut one layer, or a stack of layers, across GPUs. They are for models of tens of billions of parameters. A 2 GB encoder–decoder does not need them. |
 
-## When ZeRO becomes the right flag again
+## Those flags were removed
 
-Use `zero2` only if all of these are true:
-
-1. DDP with `--optim adamw_bnb_8bit`, `--gradient_checkpointing`, `--bf16`, and `--batch_size 1` is out of memory on one L4. That is not the current run.
-2. Python is 3.12 or older, or DeepSpeed no longer calls `torch.compile` while importing Muon. On Python 3.13 with DeepSpeed 0.20.1, ZeRO does not reach the first step.
-3. `--optim` is `adamw_torch`. Do not pass `adamw_bnb_8bit` and expect ZeRO to shard it.
-4. `--save_only_model` is off, so the checkpoint still contains the optimizer ZeRO has to reload.
-
-`zero3` waits until the bf16 weights themselves do not fit. `offload` waits until ZeRO across the two GPUs is still out of memory. Neither of those is this machine.
+The conditions that would have made ZeRO useful were not met on this machine, and FSDP never reached a step. `train.py` no longer accepts `zero2`, `zero3`, `offload`, `fsdp`, or `deepspeed`. `--deepspeed` and `--fsdp` are gone with them. `auto` with two GPU ids is DDP. `--distribution ddp` is the same path written out explicitly.

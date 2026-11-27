@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 import os
-import sys
 from pathlib import Path
 
 import torch
@@ -25,7 +24,7 @@ from indictrans2_finetune.callbacks import (
     barrier,
     resolve_log_path,
 )
-from indictrans2_finetune.config import DEEPSPEED_DISTRIBUTIONS, maybe_relaunch, parse_args
+from indictrans2_finetune.config import maybe_relaunch, parse_args
 from indictrans2_finetune.data import list_pair_dirs, prepare_file, select_training_pairs
 from indictrans2_finetune.infer import sanitize_saved_tokenizer
 from indictrans2_finetune.toolkit import get_collator, get_processor
@@ -34,35 +33,6 @@ from indictrans2_finetune.train import (
     preprocess_logits_for_metrics,
     token_stats,
 )
-
-
-def allow_deepspeed_import_without_dynamo() -> None:
-    """Let ZeRO import on Python 3.13.
-
-    DeepSpeed decorates an unused Muon kernel with ``torch.compile`` while it
-    checks the optimizer. That decorator raises on Python 3.13 before Adam is
-    considered. This run does not use Muon, so the kernel stays eager.
-    """
-    if sys.version_info < (3, 13):
-        return
-
-    def _compile(function=None, *args, **kwargs):
-        del args, kwargs
-        if callable(function):
-            return function
-
-        def decorator(inner):
-            return inner
-
-        return decorator
-
-    torch.compile = _compile
-    # original_muon.py calls torch.compiler.compile, which keeps its own
-    # reference to the original function. Replacing torch.compile alone misses it.
-    compiler = getattr(torch, "compiler", None)
-    if compiler is not None and hasattr(compiler, "compile"):
-        compiler.compile = _compile
-    print(" | > Python 3.13: ZeRO imports without torch.compile.", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,8 +45,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run(args) -> Path:
-    if args.distribution in DEEPSPEED_DISTRIBUTIONS:
-        allow_deepspeed_import_without_dynamo()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     # Building the training arguments pins this rank to its own GPU and opens
@@ -320,19 +288,10 @@ def _load_model(args):
 
 
 def _save_final(trainer, tokenizer, args) -> Path:
-    """Save the final weights.
-
-    DDP and a single GPU write from rank 0 only. ZeRO and FSDP must enter
-    ``save_model`` on every rank so the shards can be gathered; the Trainer
-    still writes the files from rank 0. ``full_lora`` is merged first, except
-    under ZeRO or FSDP, where a local merge would see only a shard.
-    """
+    """Save the final weights. Rank 0 writes the files. ``full_lora`` is merged first."""
     final_dir = Path(args.final_model_dir)
-    sharded = trainer.is_deepspeed_enabled or trainer.is_fsdp_enabled
-    if args.train_mode == "full_lora" and not sharded and trainer.is_world_process_zero():
+    if args.train_mode == "full_lora" and trainer.is_world_process_zero():
         trainer.model = trainer.model.merge_and_unload()
-    elif args.train_mode == "full_lora" and sharded and trainer.is_world_process_zero():
-        print(" | > full_lora under ZeRO/FSDP is saved unmerged. Merge the adapter after training.")
     trainer.save_model(str(final_dir))
     if trainer.is_world_process_zero():
         final_dir.mkdir(parents=True, exist_ok=True)
@@ -409,16 +368,6 @@ def _training_arguments(args) -> Seq2SeqTrainingArguments:
         kwargs["dataloader_prefetch_factor"] = 2
     if args.gradient_checkpointing and "gradient_checkpointing_kwargs" in signature.parameters:
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
-    if args.distribution == "fsdp" and "fsdp" in signature.parameters:
-        kwargs["fsdp"] = args.fsdp
-        if "fsdp_config" in signature.parameters:
-            kwargs["fsdp_config"] = {"min_num_params": 1_000_000}
-    if (
-        args.distribution in DEEPSPEED_DISTRIBUTIONS
-        and args.deepspeed
-        and "deepspeed" in signature.parameters
-    ):
-        kwargs["deepspeed"] = args.deepspeed
     training = Seq2SeqTrainingArguments(**kwargs)
     if getattr(args, "visible_gpu_count", None) == 1:
         # Hugging Face wraps a 4-bit QLoRA model in DataParallel when it

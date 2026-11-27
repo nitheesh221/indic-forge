@@ -217,58 +217,10 @@ def test_hard_cap_prefers_top_then_recent(tmp_path: Path):
     assert "checkpoint-3" not in kept
 
 
-def test_zero_uses_torch_adam():
-    eight_bit = _args(distribution="zero2", train_mode="full", optim="adamw_bnb_8bit")
-    assert eight_bit.optim == "adamw_torch"
-    kept = _args(distribution="zero2", train_mode="full", optim="adamw_torch")
-    assert kept.optim == "adamw_torch"
-
-
-def test_python_313_deepspeed_import_skips_dynamo(monkeypatch):
-    import torch
-
-    from indictrans2_finetune import runner
-
-    original = torch.compile
-    compiler = getattr(torch, "compiler", None)
-    original_compiler_compile = getattr(compiler, "compile", None)
-    monkeypatch.setattr(runner.sys, "version_info", (3, 13, 0))
-    try:
-        runner.allow_deepspeed_import_without_dynamo()
-
-        def sample(value):
-            return value
-
-        assert torch.compile(sample) is sample
-        assert torch.compile()(sample) is sample
-        if compiler is not None:
-            assert compiler.compile(sample) is sample
-            assert compiler.compile()(sample) is sample
-    finally:
-        torch.compile = original
-        if compiler is not None and original_compiler_compile is not None:
-            compiler.compile = original_compiler_compile
-
-
-def test_zero_configs_are_selected():
-    zero2 = _args(distribution="zero2", train_mode="full")
-    assert zero2.distribution == "zero2"
-    assert zero2.deepspeed.endswith("ds_zero2.json")
-    assert Path(zero2.deepspeed).is_file()
-    zero3 = _args(distribution="zero3", train_mode="full")
-    assert zero3.deepspeed.endswith("ds_zero3.json")
-    offload = _args(distribution="offload", train_mode="full")
-    assert offload.deepspeed.endswith("ds_offload.json")
-    assert Path(offload.deepspeed).is_file()
-    legacy = _args(distribution="deepspeed", train_mode="full")
-    assert legacy.distribution == "zero2"
-    assert legacy.deepspeed.endswith("ds_zero2.json")
-
-
-def test_qlora_rejects_shard_and_offload():
-    for name in ("fsdp", "deepspeed", "zero2", "zero3", "offload"):
-        with pytest.raises(SystemExit, match="QLoRA"):
-            _args(train_mode="qlora", distribution=name)
+def test_removed_distributions_are_rejected():
+    for name in ("zero2", "zero3", "offload", "fsdp", "deepspeed"):
+        with pytest.raises(SystemExit):
+            _args(distribution=name)
 
 
 def test_analyze_builds_html(tmp_path: Path):

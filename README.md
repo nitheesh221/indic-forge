@@ -10,7 +10,7 @@ This repo follows the official data layout from [`huggingface_interface/train_lo
 - Pick the right checkpoint (`en-indic`, `indic-en`, or `indic-indic`; distilled or 1B)
 - Train with SFT under `full`, `full_lora`, `lora`, or `qlora`
 - Keep **Top-K ∪ Last-K** checkpoints and write a retention manifest
-- GPU use via `--distribution auto` (default), `ddp`, `zero2`, `zero3`, or `offload`
+- GPU use via `--distribution auto` (default) or `ddp`
 - Offline RCA HTML from training CSVs (`indictrans2-ft analyze`)
 - Score chrF++, COMET, SacreBLEU, BERTScore, METEOR, TER, and exact match
 - A small web UI for the recipe, data conversion, and a translation box
@@ -54,8 +54,6 @@ python train.py --gpu_ids 0 --distribution auto ...
 # several GPUs, model already fits
 python train.py --gpu_ids 0,1 --distribution auto ...
 
-# full 1B, optimizer still does not fit
-python train.py --gpu_ids 0,1 --distribution zero2 --train_mode full ...
 ```
 
 ### 4. Visualization / RCA → offline HTML report

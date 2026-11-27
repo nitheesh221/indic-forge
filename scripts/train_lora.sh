@@ -53,7 +53,6 @@ ARGS=(
   --last_k_checkpoints "${LAST_K_CHECKPOINTS:-2}"
   --label_smoothing_factor "${LABEL_SMOOTHING_FACTOR:-0.1}"
   --distribution "${DISTRIBUTION:-auto}"
-  --fsdp "${FSDP:-full_shard auto_wrap}"
   --eval_metrics ${EVAL_METRICS:-chrf2pp comet bleu bertscore meteor ter exact_match}
   --eval_metrics_csv "${EVAL_METRICS_CSV:-eval_metrics.csv}"
   --eval_samples_csv "${EVAL_SAMPLES_CSV:-eval_samples.csv}"
@@ -90,6 +89,4 @@ fi
 [[ "${GRADIENT_CHECKPOINTING:-1}" == 1 ]] && ARGS+=(--gradient_checkpointing)
 [[ "${BF16:-1}" == 1 ]] && ARGS+=(--bf16)
 [[ "${FP16:-0}" == 1 ]] && ARGS+=(--fp16) # Do not enable together with BF16.
-[[ -n "${DEEPSPEED:-}" ]] && ARGS+=(--deepspeed "$DEEPSPEED")
-
 python train.py "${ARGS[@]}"

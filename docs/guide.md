@@ -88,7 +88,7 @@ The latest multi-GPU behavior, which is what you should expect on a 2× GPU box:
 4. Length-grouped batches are on for one GPU and off for two or more. Grouping by length can give the two processes a different number of steps, and the shorter one then waits until the timeout.
 5. Before a checkpoint is deleted, both ranks wait. Rank 0 then deletes. This covers both Top-K and Last-K.
 
-DDP does not make a model fit that did not fit on one GPU. It copies the model. A full 1B update that runs out of memory on one card still runs out of memory as two copies. That case is ZeRO, in the distribution section below.
+DDP does not make a model fit that did not fit on one GPU. It copies the model. If one copy is out of memory, lower the batch, turn on gradient checkpointing, and use 8-bit Adam. ZeRO and FSDP are not available. The record of those failed runs is [deepspeed.md](deepspeed.md).
 
 Adding a GPU multiplies the effective batch:
 
@@ -157,7 +157,7 @@ There is no automatic search over these values in the repo. A useful first compa
 | PEFT | LoRA and QLoRA adapters |
 | bitsandbytes | 4-bit QLoRA, and 8-bit Adam when you ask for it |
 | Accelerate / `torchrun` | Starts one process per GPU. This repo relaunches `torchrun` for you |
-| DeepSpeed | Optional. Only for `zero2`, `zero3`, and `offload` |
+| DeepSpeed | Not used. ZeRO flags were removed after they failed to start. |
 | IndicTransToolkit | Language-tag preprocessing and postprocessing |
 | `datasets` | Holds the tokenized sentences |
 | sacrebleu | chrF++, BLEU, TER |
@@ -172,9 +172,9 @@ PEFT here means a LoRA adapter. The frozen base model keeps the general translat
 
 **`lora`.** Rank `8`, alpha `16`, dropout `0.05`, modules `q_proj,k_proj`. Learning rate `2e-4`. Optimizer `adamw_torch`. This is the default experiment. Rank is the width of the adapter. Alpha scales the adapter update. The usual ratio in this repo is alpha = 2 × rank. Dropout `0.05` randomly zeros adapter activations so the adapter does not memorize a small file.
 
-**`qlora`.** The same adapter numbers. The base weights are loaded in 4-bit (`nf4`, compute dtype `bfloat16`). Double quantization is off unless you pass `--bnb_4bit_use_double_quant`. Calling `train.py` without `--optim` selects `paged_adamw_32bit`, which is the optimizer that can page to CPU when the GPU is tight. The shell script `scripts/train_qlora.sh` passes `adamw_torch` unless you set `OPTIM`. QLoRA runs with `auto` or `ddp` only. It refuses ZeRO and FSDP.
+**`qlora`.** The same adapter numbers. The base weights are loaded in 4-bit (`nf4`, compute dtype `bfloat16`). Double quantization is off unless you pass `--bnb_4bit_use_double_quant`. Calling `train.py` without `--optim` selects `paged_adamw_32bit`, which is the optimizer that can page to CPU when the GPU is tight. The shell script `scripts/train_qlora.sh` passes `adamw_torch` unless you set `OPTIM`. QLoRA runs with `auto` or `ddp`.
 
-**`full_lora`.** Same rank, alpha, and dropout. The modules widen to `q_proj,k_proj,v_proj,out_proj,fc1,fc2`, so the feed-forward layers get an adapter too. The learning rate drops to `2e-5` because more of the network is moving. At the end the adapter is merged into a full model, except under ZeRO or FSDP, where a merge would see only a shard and the adapter is saved unmerged.
+**`full_lora`.** Same rank, alpha, and dropout. The modules widen to `q_proj,k_proj,v_proj,out_proj,fc1,fc2`, so the feed-forward layers get an adapter too. The learning rate drops to `2e-5` because more of the network is moving. At the end the adapter is merged into a full model.
 
 **`full`.** No adapter. Every weight trains at `2e-5`. `scripts/train_full.sh` uses batch 1, accumulation 8, 8-bit Adam, gradient checkpointing, and bf16, because a full update stores an Adam state for every parameter. The LoRA flags are still accepted by that script so the command shape stays the same. They are not used.
 
@@ -206,7 +206,7 @@ Early stopping uses that same score. `--early_stopping_patience` defaults to `3`
 
 `--save_total_limit 0` means no extra cap. A positive number trims the union down to that many folders, best scores first.
 
-On multi-GPU, both ranks sync before a delete, then only rank 0 deletes. ZeRO and FSDP must enter the final save on every rank. Only rank 0 writes the files.
+On multi-GPU, both ranks sync before a delete, then only rank 0 deletes. Only rank 0 writes the final files.
 
 The longer version is [checkpoints.md](checkpoints.md).
 
@@ -265,17 +265,12 @@ The training CSV is `eval_metrics.csv`. A bare file name is written under `--out
 
 | Value | Use it when |
 | --- | --- |
-| `auto` | Always, until something does not fit. One GPU is a normal run. Two or more ids become DDP. |
-| `ddp` | You want the command to say DDP. Same path as `auto` with two or more GPUs. |
-| `zero2` | Full fine-tune of the 1B model, and DDP with 8-bit Adam is still out of memory. Set `SAVE_ONLY_MODEL=0`. Install DeepSpeed. On Python 3.13 with DeepSpeed 0.20.1 this flag does not start; see [deepspeed.md](deepspeed.md). |
-| `zero3` | The weights themselves do not fit. Rare for IndicTrans2. The 1B weights are about 2 GB. |
-| `offload` | Last resort. Weights and Adam sit in CPU RAM. It is slow. |
-| `fsdp` | Not supported for IndicTrans here. A real 1B launch died with `IndicTransForConditionalGeneration has no attribute decoder` while Accelerate tied weights. No step ran. Details are in [deepspeed.md](deepspeed.md). |
-| `deepspeed` | Old name. It is treated as `zero2`. |
+| `auto` | The default. One GPU is a normal run. Two or more ids become DDP. |
+| `ddp` | The same multi-GPU path, written out explicitly. |
 
-QLoRA allows only `auto` and `ddp`.
+`zero2`, `zero3`, `offload`, `fsdp`, and `deepspeed` are rejected. The 1B runs that failed under those flags are in [deepspeed.md](deepspeed.md).
 
-The full decision list, including what this project deliberately does not use (DataParallel, ZeRO-1, tensor and pipeline parallelism), is [distribution.md](distribution.md). The 1B L4 run that stopped in DeepSpeed and then trained with DDP is written up in [deepspeed.md](deepspeed.md).
+The decision list, including what this project does not use, is [distribution.md](distribution.md).
 
 ## Visualization for analysis (RCA)
 

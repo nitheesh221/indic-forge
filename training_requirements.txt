@@ -16,9 +16,9 @@
 
 # Training is supervised fine-tuning. There is no --train_method flag.
 # label_smoothing_factor default 0.1.
-# Distribution: --distribution auto (default) | ddp | zero2 | zero3 | offload.
-#   fsdp is advanced. deepspeed is the old name for zero2.
-#   QLoRA allows only auto and ddp. See docs/distribution.md.
+# Distribution: --distribution auto (default) | ddp.
+#   Two or more --gpu_ids relaunch as DDP. ZeRO, offload, and FSDP are rejected.
+#   See docs/distribution.md and docs/deepspeed.md.
 # --write_rca / --no-write_rca  default: write rca_report.html after train.
 
 # =============================================================================
@@ -30,8 +30,7 @@
 # CUDA: required for real training (CPU allowed only for data/tests and slow inference)
 # BitsAndBytes: required for train_mode=qlora
 # setuptools>=69,<81: required so COMET can import pkg_resources
-# DeepSpeed: not installed by default. Required only for
-#   --distribution zero2, zero3, or offload (`pip install deepspeed`).
+# DeepSpeed: not used. zero2, zero3, offload, and fsdp were removed.
 
 python_requires = >=3.10
 
@@ -327,7 +326,7 @@ pytest>=8.0.0
 #   one id keeps the Trainer off DataParallel (required for QLoRA)
 # --ddp_timeout              default: 14400 seconds (4 hours)
 #   how long a rank waits for the others before the process group is killed
-#   covers a long beam-search validation on DDP and DeepSpeed
+#   covers a long beam-search validation on DDP
 #   training arguments are built before the model loads, which pins each
 #   rank to its own GPU and opens the process group with this timeout
 # --num_workers              default: 4
@@ -335,22 +334,12 @@ pytest>=8.0.0
 #   Length-grouped batches can give two ranks a different number of steps.
 # --gradient_checkpointing   flag, default: false
 # --bf16 / --fp16            mutually exclusive flags
-# --distribution   choices: auto | ddp | zero2 | zero3 | offload | fsdp | deepspeed
+# --distribution   choices: auto | ddp
 #                  default: auto
 #   auto      1 GPU single process; 2+ --gpu_ids relaunch as DDP
-#   ddp       explicit multi-GPU speed path (same as auto with 2+ GPUs)
-#   zero2     DeepSpeed ZeRO-2, configs/ds_zero2.json
-#             full 1B after checkpointing + 8-bit Adam still OOM
-#   zero3     DeepSpeed ZeRO-3, configs/ds_zero3.json
-#             only when the weights themselves do not fit
-#   offload   ZeRO-3 with CPU offload, configs/ds_offload.json
-#             slow last resort. Edit device to nvme for disk offload.
-#   fsdp      advanced, not the normal choice
-#   deepspeed old name; resolved to zero2
-# --deepspeed      optional JSON that replaces the shipped config
-# --fsdp           default: "full_shard auto_wrap" (only when distribution=fsdp)
-# QLoRA allows only auto and ddp.
-# Guide: docs/distribution.md
+#   ddp       explicit multi-GPU path (same as auto with 2+ GPUs)
+# zero2, zero3, offload, fsdp, and deepspeed are rejected.
+# Guide: docs/distribution.md and docs/deepspeed.md
 
 # Small-GPU full FT (no ZeRO): --gpu_ids 0, --optim adamw_bnb_8bit,
 #   --batch_size 1 --gradient_accumulation_steps 8 --gradient_checkpointing
@@ -385,7 +374,7 @@ pytest>=8.0.0
 #                          distribution, model_hf_id, train_mode, languages,
 #                          learning_rate, label smoothing, LoRA targets, metrics,
 #                          best_model_checkpoint, best_metric, epochs_completed
-#   ZeRO and FSDP still enter the save on every rank. Only rank 0 writes files.
+#   Only rank 0 writes files.
 # inference_predictions.csv   written by JSON inference (see section 18)
 # inference_metrics.csv       written by JSON inference (see section 18)
 
