@@ -450,7 +450,7 @@ Weights come from the Hugging Face hub. `--model_hf_id` must be one of these six
 | English → Indic | `ai4bharat/indictrans2-en-indic-dist-200M` | `ai4bharat/indictrans2-en-indic-1B` |
 | Indic → English | `ai4bharat/indictrans2-indic-en-dist-200M` | `ai4bharat/indictrans2-indic-en-1B` |
 
-Weight size in bf16 is about 0.4 GB (200M), 0.6 GB (320M), and 2 GB (1B). The vocabulary is about 256k tokens. A full Adam state for the 1B model is on the order of 18 GB before activations. That is why the 1B full run uses 8-bit Adam.
+Weight size in bf16 is about 0.4 GB (200M), and 2 GB (1B). The vocabulary is about 256k tokens. A full Adam state for the 1B model is on the order of 18 GB before activations. That is why the 1B full run uses 8-bit Adam.
 
 A pair is trained only on the matching direction. Bengali→English rows are rejected by an `en-indic` checkpoint.
 
