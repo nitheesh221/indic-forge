@@ -191,7 +191,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --text "নৱাগত ৰিয়া চক্ৰৱৰ্তীক এক গুৰুত্বপূৰ্ণ ভূমিকা পালন কৰিবলৈ নিয়োগ কৰা হৈছে।" \
   --src-lang asm_Beng \
   --tgt-lang eng_Latn \
-  --model OUT2/indic-en-1b/final_model \
+  --model ai4bharat/indictrans2-indic-en-dist-200M \
   --max-length 256 \
   --num-beams 5 \
   --batch-size 8
@@ -204,7 +204,7 @@ PYTHONPATH=src python -m indictrans2_finetune.cli translate \
   --file sentences.txt \
   --src-lang hin_Deva \
   --tgt-lang eng_Latn \
-  --model OUT2/indic-en-1b/final_model
+  --model ai4bharat/indictrans2-indic-en-dist-200M
 ```
 
 `--text`, `--file`, and `--json-file` are mutually exclusive.
