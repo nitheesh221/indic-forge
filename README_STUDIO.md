@@ -2,7 +2,7 @@
 
 This file is the contract for ML Studio: the commands that work today, the package freeze from the L4 machine, the data layout, the hardware limits, the files training writes, and every flag. It does not change the trainer.
 
-The run that this page treats as proven is a full fine-tune of `ai4bharat/indictrans2-indic-en-1B` on two NVIDIA L4 GPUs (23,034 MiB each), Python 3.13.5, with DDP, 8-bit Adam, and bf16. LoRA, QLoRA, and full-LoRA of the public distilled checkpoints use the same entry point.
+The run that this page treats as proven is a full fine-tune of `ai4bharat/indictrans2-indic-en-dist-200M` on two NVIDIA L4 GPUs (23,034 MiB each), Python 3.13.5, with DDP, 8-bit Adam, and bf16. LoRA, QLoRA, and full-LoRA of the public distilled checkpoints use the same entry point.
 
 Leave `--distribution` off. The default `auto` is one process when `--gpu_ids` has one id, and DDP when it has two or more.
 
@@ -11,7 +11,7 @@ Leave `--distribution` off. The default `auto` is one process when `--gpu_ids` h
 Run every command from the repository root, inside the virtualenv that produced the freeze below.
 
 ```bash
-cd /shared/nithish/INDICTRANS2_train_custom/indic-forge
+cd indic-forge
 source .venv/bin/activate
 export PYTHONPATH=src
 ```
@@ -64,8 +64,8 @@ python train.py \
   --gpu_ids 0 \
   --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
   --train_mode lora \
-  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
-  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --train_json data/train.json \
+  --val_json data/valid.json \
   --output_dir it2_out/lora \
   --final_model_dir it2_out/lora/final_model \
   --epochs 2 \
@@ -88,8 +88,8 @@ python train.py \
   --gpu_ids 0 \
   --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
   --train_mode full \
-  --train_json /shared/nithish/INDICTRANS2_train_custom/data/train.json \
-  --val_json /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --train_json data/train.json \
+  --val_json data/valid.json \
   --output_dir it2_out/full \
   --final_model_dir it2_out/full/final_model \
   --epochs 2 \
@@ -111,10 +111,10 @@ The 1B Indic→English command that trained on the two L4s. Effective batch is `
 ```bash
 python train.py \
   --gpu_ids 0,1 \
-  --model_hf_id ai4bharat/indictrans2-indic-en-1B \
+  --model_hf_id ai4bharat/indictrans2-indic-en-dist-200M \
   --train_mode full \
-  --train_json /shared/nithish/INDICTRANS2_train_custom/indic-forge/split_dataset/train.json \
-  --val_json /shared/nithish/INDICTRANS2_train_custom/indic-forge/split_dataset/valid.json \
+  --train_json indic-forge/split_dataset/train.json \
+  --val_json indic-forge/split_dataset/valid.json \
   --output_dir OUT2/indic-en-1b \
   --final_model_dir OUT2/indic-en-1b/final_model \
   --epochs 8 \
@@ -151,7 +151,7 @@ A held-out JSON file is scored with the translate command. `tgt_text` is the ref
 
 ```bash
 PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file /shared/nithish/INDICTRANS2_train_custom/indic-forge/split_dataset/valid.json \
+  --json-file indic-forge/split_dataset/valid.json \
   --model OUT2/indic-en-1b/final_model \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
   --predictions-csv OUT2/indic-en-1b/inference_predictions.csv \
@@ -165,7 +165,7 @@ LoRA and QLoRA pass the base hub id and the adapter directory. The adapter direc
 
 ```bash
 PYTHONPATH=src python -m indictrans2_finetune.cli translate \
-  --json-file /shared/nithish/INDICTRANS2_train_custom/data/valid.json \
+  --json-file data/valid.json \
   --model ai4bharat/indictrans2-indic-en-dist-200M \
   --adapter it2_out/lora/final_model \
   --eval-metrics chrf2pp comet bleu bertscore meteor ter exact_match \
@@ -448,7 +448,7 @@ Weights come from the Hugging Face hub. `--model_hf_id` must be one of these six
 | Direction | Distilled, public | 1B, gated |
 | --- | --- | --- |
 | English → Indic | `ai4bharat/indictrans2-en-indic-dist-200M` | `ai4bharat/indictrans2-en-indic-1B` |
-| Indic → English | `ai4bharat/indictrans2-indic-en-dist-200M` | `ai4bharat/indictrans2-indic-en-1B` |
+| Indic → English | `ai4bharat/indictrans2-indic-en-dist-200M` | `ai4bharat/indictrans2-indic-en-dist-200M` |
 
 Weight size in bf16 is about 0.4 GB (200M), and 2 GB (1B). The vocabulary is about 256k tokens. A full Adam state for the 1B model is on the order of 18 GB before activations. That is why the 1B full run uses 8-bit Adam.
 
@@ -580,7 +580,7 @@ A parenthetical list is the only set the parser accepts. A numeric range is the 
 
 | Name | What it does | Default | Allowed range / values | Level | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| `--model_hf_id` | Hub id of the base checkpoint. Also selects the translation direction. | required | (`ai4bharat/indictrans2-en-indic-dist-200M`, `ai4bharat/indictrans2-en-indic-1B`, `ai4bharat/indictrans2-indic-en-dist-200M`, `ai4bharat/indictrans2-indic-en-1B`, `ai4bharat/indictrans2-indic-indic-dist-320M`, `ai4bharat/indictrans2-indic-indic-1B`) | Basic | Language pair |
+| `--model_hf_id` | Hub id of the base checkpoint. Also selects the translation direction. | required | (`ai4bharat/indictrans2-en-indic-dist-200M`, `ai4bharat/indictrans2-en-indic-1B`, `ai4bharat/indictrans2-indic-en-dist-200M`, `ai4bharat/indictrans2-indic-en-dist-200M`, `ai4bharat/indictrans2-indic-indic-dist-320M`, `ai4bharat/indictrans2-indic-indic-1B`) | Basic | Language pair |
 | `--train_mode` | Which weights move. | `lora` | (`full`, `full_lora`, `lora`, `qlora`) | Basic | GPU memory |
 | `--train_json` | Train file. | none | A `.json`, `.jsonl`, `.csv`, `.tsv`, or `.tab` path | Basic | Data split |
 | `--val_json` | Validation file. | none | Same file types as `--train_json` | Basic | `--train_json` |
