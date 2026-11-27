@@ -451,7 +451,6 @@ Weights come from the Hugging Face hub. `--model_hf_id` must be one of these six
 | --- | --- | --- |
 | English → Indic | `ai4bharat/indictrans2-en-indic-dist-200M` | `ai4bharat/indictrans2-en-indic-1B` |
 | Indic → English | `ai4bharat/indictrans2-indic-en-dist-200M` | `ai4bharat/indictrans2-indic-en-1B` |
-| Indic → Indic | `ai4bharat/indictrans2-indic-indic-dist-320M` | `ai4bharat/indictrans2-indic-indic-1B` |
 
 Weight size in bf16 is about 0.4 GB (200M), 0.6 GB (320M), and 2 GB (1B). The vocabulary is about 256k tokens. A full Adam state for the 1B model is on the order of 18 GB before activations. That is why the 1B full run uses 8-bit Adam.
 
@@ -469,13 +468,7 @@ The code does not check the compute capability. These are the limits of the prec
 
 | GPU | Capability | This recipe |
 | --- | --- | --- |
-| T4 | 7.5 | No bf16. `--fp16` is the training switch. 16 GB is below the 1B full run that fit on 24 GB. |
-| A100 | 8.0 | bf16 is allowed. |
-| A10 | 8.6 | bf16 is allowed. A 24 GB card matches the memory this run used. |
 | L4 | 8.9 | Tested. Two cards, 23,034 MiB each. |
-| H100 | 9.0 | bf16 is allowed. Not part of this run. |
-| B200 | 10.0 | bf16 is allowed. Not part of this run. |
-| RTX PRO 6000 | 12.0 | bf16 is allowed. Not part of this run. |
 
 Studio image for the tested recipe: Python 3.13.5, driver `535.309.01` or another driver whose `nvidia-smi` CUDA line is at least 12.1, PyTorch `2.5.1+cu121`, cuDNN `9.1.0.70`, and the freeze above. Do not add flash-attn. Do not make DeepSpeed a required build.
 
@@ -495,8 +488,6 @@ Training precision is bf16 on the L4 command. `--bf16` and `--fp16` cannot both 
 
 Supported: DDP, by passing two or more ids in `--gpu_ids`. The default distribution `auto` does that relaunch. `--distribution ddp` is the same path.
 
-Not supported: DeepSpeed ZeRO, ZeRO offload, FSDP, DataParallel, tensor parallelism, and pipeline parallelism. Those flags were removed after they failed to train this checkpoint. The record is `docs/deepspeed.md`.
-
 Generation uses `use_cache=False`. IndicTrans2 beam search crashes if the KV cache is left on. That is not a flag.
 
 ### Credentials
@@ -508,7 +499,7 @@ Store these outside the code and outside the image.
 | `HF_TOKEN` | Required for the three 1B checkpoints. The Hugging Face account that owns the token must accept the model card. Set `HUGGING_FACE_HUB_TOKEN` to the same value in the shell that launches training. |
 | `HUGGING_FACE_HUB_TOKEN` | Same token. Set both. A token exported in a different shell is invisible to the process. |
 
-The distilled 200M and 320M checkpoints are public. COMET, BERTScore, and the NLTK wordnet download do not need a token. No other API key is read.
+The distilled 200M  checkpoints are public. COMET, BERTScore, and the NLTK wordnet download do not need a token. No other API key is read.
 
 ## 4. Outputs and metrics
 
@@ -558,7 +549,7 @@ At each evaluation, the same log gains:
 - `eval_mean_token_accuracy`
 - the translation metrics named in `--eval_metrics`
 
-`--report_to tensorboard` also writes a TensorBoard event file. The default is `none`, so the live surface without that flag is stdout plus the three CSVs.
+`--report_to The default is `none`, so the live surface without that flag is stdout plus the three CSVs.
 
 `eval_loss` is the metric that picks the best checkpoint and early stopping. Lower is better. `eval_mean_token_accuracy` is the one allowed metric where higher is better. chrF++, COMET, BLEU, BERTScore, METEOR, TER, and exact match are recorded and never choose the checkpoint.
 
@@ -652,7 +643,7 @@ A parenthetical list is the only set the parser accepts. A numeric range is the 
 | `--bnb_4bit_quant_type` | 4-bit storage type. | `nf4` | (`nf4`, `fp4`) | Expert | `--train_mode qlora` |
 | `--bnb_4bit_use_double_quant` | Also quantize the quantization constants. | off | (on, off) | Expert | `--train_mode qlora` |
 | `--model_id` | Local weights or a hub id to load. Direction still comes from `--model_hf_id`. | the value of `--model_hf_id` | A hub id or a local directory | Expert | `--model_hf_id` |
-| `--report_to` | Live logger besides the CSVs. | `none` | (`none`, `tensorboard`) | Expert | |
+| `--report_to` | Live logger besides the CSVs. | `none` | (`none`) | Expert | |
 | `--write_rca` / `--no-write_rca` | Write `rca_report.html` after training. | on | (on, off) | Expert | The training CSVs |
 | `--eval_metrics_csv` | Validation metric file name. | `eval_metrics.csv` | A file name or a path | Expert | `--output_dir` |
 | `--eval_samples_csv` | Validation sentence file name. | `eval_samples.csv` | A file name or a path | Expert | `--output_dir` |
